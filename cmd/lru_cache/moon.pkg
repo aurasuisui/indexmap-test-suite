@@ -1,0 +1,7 @@
+import {
+  "aurasuisui/indexmap",
+}
+
+options(
+  "is-main": true,
+)
