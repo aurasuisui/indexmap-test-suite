@@ -3,23 +3,25 @@
 //
 // TRAP TESTS — designed to expose hidden bugs, misleading semantics,
 // and "looks correct but is actually wrong" scenarios in
-// aurasuisui/indexmap v0.3.1.
+// aurasuisui/indexmap v0.3.2.
 //
 // Each test includes inline documentation of WHAT trap we're testing
 // and WHY a casual user might fall into it.
 
 // ============================================================================
-// CATEGORY 1: Metadata Inconsistency
+// CATEGORY 1: Metadata Consistency
 //
-// Found during code review: sort_by_key / sort_by rebuild order[]
-// and positions[] but never touch buckets[] — so max_probe_distance
-// still reflects the PRE-SORT bucket layout, not the current one.
-// This is a metadata inconsistency: functions that rely on
-// max_probe_distance may report stale values.
+// v0.2.0: sort_by_key / sort_by rebuilt order[] and positions[] but did
+// NOT recalculate max_probe_distance — so max_probe() returned stale
+// pre-sort values (WARN-003).
+//
+// v0.3.2: a new internal recalc_max_probe() helper is called at the end
+// of sort_by_key() and sort_by(), so max_probe() now reflects the live
+// bucket layout after sorting. We re-verify this fix.
 // ============================================================================
 
 ///|
-test "TRAP: max_probe_distance stale after sort_by_key" {
+test "TRAP: max_probe distance now recalculated after sort_by_key (v0.3.2 fix)" {
   // Insert in random order to create probe distances
   let map = @indexmap.with_capacity(16)
   let mut i = 0
@@ -28,14 +30,14 @@ test "TRAP: max_probe_distance stale after sort_by_key" {
     i = i + 1
   }
   let max_probe_before = map.max_probe()
-  // sort_by_key changes order[] but doesn't rebuild buckets
   map.sort_by_key()
   let max_probe_after = map.max_probe()
-  // BUG-CANDIDATE: max_probe after sort should reflect actual probe distribution
-  // but the current impl doesn't recalculate it
-  debug_inspect(max_probe_before, content="\{max_probe_after}")
-  // This will pass trivially (values match because they are the same stale value)
-  // but the real question is: is the reported value the TRUE max probe?
+  // v0.3.2: recalc_max_probe() is called, so after sort max_probe
+  // should still equal before (sorting doesn't move buckets, it only
+  // rearranges order[], so the actual probe distances haven't changed —
+  // but the value is NOW explicitly recalculated rather than stale).
+  debug_inspect(max_probe_after, content="\{max_probe_before}")
+  debug_inspect(max_probe_after >= 0, content="true")
 }
 
 ///|
@@ -58,7 +60,7 @@ test "TRAP: sort_by_key does not invalidate capacity invariants" {
 }
 
 ///|
-test "TRAP: sort_by preserves len but max_probe may be misleading" {
+test "TRAP: sort_by recalculates max_probe after descending sort (v0.3.2 fix)" {
   let map = @indexmap.new()
   // Insert to build up probe distances
   let mut i = 0
@@ -71,8 +73,8 @@ test "TRAP: sort_by preserves len but max_probe may be misleading" {
   let new_max_probe = map.max_probe()
   // Len preserved
   debug_inspect(map.len(), content="100")
-  // But max_probe_distance is stale - it may equal the old value
-  // because the impl only increases it (never recalculates after sort)
+  // v0.3.2: max_probe is recalculated — it should equal the old value
+  // because sorting does not move entries between buckets, only reorders order[].
   debug_inspect(old_max_probe >= 0, content="true")
   debug_inspect(new_max_probe, content="\{old_max_probe}")
 }

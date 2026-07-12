@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // COMPREHENSIVE TESTS: covering the remaining untested dimensions
-// for aurasuisui/indexmap v0.3.1.
+// for aurasuisui/indexmap v0.3.2.
 //
 // Categories:
 //   Custom struct keys (cross-module trait resolution)
@@ -297,7 +297,7 @@ test "get_mut nested: delete self via None then insert new entry" {
 }
 
 ///|
-test "get_mut nested: callback deletes then re-inserts same key" {
+test "get_mut nested: callback deletes then re-inserts same key (BUG-001 fixed in v0.3.2)" {
   let map = @indexmap.new()
   map.insert("cycle", 5) |> ignore
   map.insert("other", 10) |> ignore
@@ -306,36 +306,18 @@ test "get_mut nested: callback deletes then re-inserts same key" {
     match v {
       Some(old) => {
         map.insert("cycle", old * 10) |> ignore
-        None // delete the ORIGINAL entry via tombstone
+        None // return None to request deletion
       }
       None => None
     }
   })
-  // After get_mut callback: old entry tombstoned (len -1),
-  // new entry inserted (len +1). Net change = 0. Total = 2.
-  // But get_mut decrements len AFTER the callback returns.
-  // So during callback: len=2 (other + cycle=5). insert("cycle",50) makes len=3
-  // (other + cycle=5 overwritten + cycle=50 new). Then callback returns None,
-  // get_mut sets tombstone and decrements len from 3 to 2.
-  // The tombstone is on the ORIGINAL bucket, but the key was already
-  // re-inserted in the same bucket slot (since key hash is same).
-  // The re-insert stole the bucket from the tombstone.
-  // Therefore tombstone is never actually created, and len ends at 3
-  // (other + cycle=50), not 2. This is a subtle interaction.
-  //
-  // STRICT VERDICT: during get_mut, the callback calls insert("cycle", 50).
-  // insert finds existing key (tombstone or live) and updates value + position.
-  // Then callback returns None → get_mut tombstones the bucket.
-  // The tombstone overwrites the INSERTED value!
-  // So "cycle" ends up as a tombstone (not accessible).
-  // The order[] still has two entries, one of which points to a tombstone.
-  // But iter() skips tombstones, so only "other" is visible.
-  // This is a REAL GOTCHA: combining insert+delete in the same get_mut
-  // callback on the same key produces inconsistent state.
+  // v0.3.2 fix: contains(key) guard in get_mut detects the re-insertion
+  // and skips the tombstone, so the re-inserted value survives.
+  debug_inspect(map.contains("cycle"), content="true")
+  debug_inspect(map.get("cycle"), content="Some(50)")
   debug_inspect(map.contains("other"), content="true")
-  // "cycle" may or may not be present depending on tombstone race
-  // We validate the ACTUAL behavior:
   debug_inspect(map.get("other"), content="Some(10)")
+  debug_inspect(map.len(), content="2")
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 moonbit-indexmap contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-// Black-box test suite for aurasuisui/indexmap v0.3.1.
+// Black-box test suite for aurasuisui/indexmap v0.3.2.
 // Tests every public API method documented in the README against the
 // library consumed as an external dependency via moon.work.
 
@@ -697,7 +697,7 @@ test "ToJson trait: to_json() serializes preserving order" {
 ///|
 test "VERSION constant is defined" {
   debug_inspect(@indexmap.VERSION, content=(
-    #|"0.3.1"
+    #|"0.3.2"
   ))
 }
 

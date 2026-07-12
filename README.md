@@ -92,23 +92,24 @@ d => delta
 
 ## Key Findings
 
-### 🔴 Bug Found
+### 🔴 Bug Found (fixed in v0.3.2)
 
 **get_mut callback: simultaneous delete + re-insert of same key causes data loss**
-- When a `get_mut` callback returns `None` (triggering tombstone deletion) AND calls `insert(same_key, ...)` on the map in the same callback, the tombstone overwrites the just-inserted value.
-- See `tests/comprehensive_test.mbt` line ~296 for the reproduction test.
+- When a `get_mut` callback returns `None` (triggering tombstone deletion) AND calls `insert(same_key, ...)` on the map in the same callback, the tombstone **used to** overwrite the just-inserted value.
+- **v0.3.2 fix**: A `contains(key)` guard in `get_mut`'s `None` branch now detects re-insertion and skips the tombstone, so the value survives.
+- See `tests/comprehensive_test.mbt` for the reproduction-turned-regression test.
 - See `TEST_REPORT.md` BUG-001 for detailed analysis.
 
-**v0.3.1 status**: Still present. Listed as Gotcha #1 in the library's README.
+**v0.3.2 status**: ✅ Fixed. Library README Gotcha #1 updated.
 
 ### 🟡 Design Warnings
 
-| # | Issue | Detail |
-|---|-------|--------|
-| WARN-001 | `Eq` / `Hash` depend on insertion order | `{a:1, b:2} != {b:2, a:1}` — unlike standard `Map`. IndexSet equally affected. |
-| WARN-002 | `swap_remove_index` is O(n) shift-remove | Name implies O(1) swap-with-last, but implementation does order-preserving shift-remove. |
-| WARN-003 | `max_probe_distance` stale after `sort_by_key` / `sort_by` | Sorting only rebuilds `order[]`/`positions[]`, not `buckets[]`. |
-| WARN-004 | Iterator mutation is fail-fast (crash) | Removing keys during iteration causes OOB array access — crashes rather than silently corrupting. |
+| # | Issue | Detail | Status |
+|---|-------|--------|--------|
+| WARN-001 | `Eq` / `Hash` depend on insertion order | `{a:1, b:2} != {b:2, a:1}` — unlike standard `Map`. IndexSet equally affected. | Still present |
+| WARN-002 | `swap_remove_index` is O(n) shift-remove | Name implies O(1) swap-with-last, but implementation does order-preserving shift-remove. | README clarified in v0.3.2 |
+| WARN-003 | `max_probe_distance` was stale after `sort_by_key` / `sort_by` | Sorting only rebuilt `order[]`/`positions[]`, not `buckets[]`. | ✅ Fixed in v0.3.2 |
+| WARN-004 | Iterator mutation is fail-fast (crash) | Removing keys during iteration causes OOB array access — crashes rather than silently corrupting. | Still present |
 
 ### 🟢 Strengths Verified
 
@@ -156,18 +157,21 @@ All test files access the library via the `@indexmap` alias declared in `tests/m
 
 **Overall: Production-ready for single-threaded use.** For detailed analysis, see [TEST_REPORT.md](TEST_REPORT.md).
 
-## v0.2.0 → v0.3.1 Changes
+## v0.2.0 → v0.3.1 → v0.3.2 Changes
 
-Our test suite was upgraded from targeting v0.2.0 to v0.3.1. Key changes:
+Our test suite tracks each upgrade of the library. Key changes:
 
-| Change | Impact on tests |
-|--------|----------------|
-| `extend` → `extend_from_array` (breaking) | 6 call sites renamed; `extend` is now a reserved keyword |
-| `inspect` → `debug_inspect` migration | ~523 assert sites migrated; snapshots updated via `moon test -u` |
-| `Show::to_string` → `@debug.to_string` (ToJson impl) | JSON serialization tests updated; output format unchanged |
-| `VERSION` constant: "0.2.0" → "0.3.1" | Version assertions updated |
-| Examples in `cmd/` packages | LRU cache example kept; library's other examples not duplicated |
-| 5 gotchas documented in library README | All 1 bug + 4 warnings confirmed still present in v0.3.1 |
+| Version | Change | Impact on tests |
+|---------|--------|----------------|
+| v0.3.0 | `extend` → `extend_from_array` (breaking) | 6 call sites renamed; `extend` is now a reserved keyword |
+| v0.3.1 | `inspect` → `debug_inspect` migration | ~523 assert sites migrated; snapshots updated via `moon test -u` |
+| v0.3.1 | `Show::to_string` → `@debug.to_string` | JSON serialization tests updated; output format unchanged |
+| v0.3.2 | **BUG-001 fixed** — `contains(key)` guard in `get_mut` | Test rewritten from bug reproduction to regression assertion |
+| v0.3.2 | **WARN-003 fixed** — `recalc_max_probe()` after sort | `max_probe` trap tests rewritten to verify fix |
+| v0.3.2 | **WARN-002 clarified** — README Gotcha #3 wording fixed | No test change; documentation note updated |
+| v0.3.2 | `VERSION` constant: "0.3.1" → "0.3.2" | Version assertions updated |
+
+**Final tally**: 232 black-box tests + 253 library self-tests = 485 total, 0 failures.
 
 ## License
 

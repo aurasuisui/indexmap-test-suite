@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Extreme stress / robustness / memory / edge-case tests for
-// aurasuisui/indexmap v0.3.1 — consumed as an external dependency.
+// aurasuisui/indexmap v0.3.2 — consumed as an external dependency.
 //
 // Evaluates: robustness at scale, memory efficiency, edge conditions,
 // concurrent-access safety (via copy/consume patterns), and
@@ -943,9 +943,9 @@ test "stress: IndexSet large-scale operations" {
 }
 
 ///|
-test "stress: VERSION constant is 0.3.1" {
+test "stress: VERSION constant is 0.3.2" {
   debug_inspect(@indexmap.VERSION, content=(
-    #|"0.3.1"
+    #|"0.3.2"
   ))
 }
 

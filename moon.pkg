@@ -2,5 +2,5 @@ import {
   "moonbitlang/core/test",
 }
 
-// Black-box test suite for aurasuisui/indexmap v0.3.1.
+// Black-box test suite for aurasuisui/indexmap v0.3.2.
 // See README.md for test matrix and findings.

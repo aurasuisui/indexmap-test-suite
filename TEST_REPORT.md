@@ -1,47 +1,62 @@
-# Test Report — aurasuisui/indexmap v0.3.1
+# Test Report — aurasuisui/indexmap v0.3.2
 
 **Date**: 2026-07-12
 **Test Suite**: indexmap-test-suite (independent black-box)
 **Toolchain**: moon 0.1.20260710
-**Library Under Test**: [aurasuisui/indexmap](https://github.com/aurasuisui/moonbit-indexmap) v0.3.1
+**Library Under Test**: [aurasuisui/indexmap](https://github.com/aurasuisui/moonbit-indexmap) v0.3.2
 
 ---
 
 ## Executive Summary
 
-`aurasuisui/indexmap` v0.3.1 passed **485 total tests** with **0 failures**. This report covers the upgrade from v0.2.0 to v0.3.1, re-verification of all previously identified issues, and changes stemming from the library's `inspect`→`debug_inspect` migration and `extend`→`extend_from_array` rename.
+`aurasuisui/indexmap` v0.3.2 passed **485 total tests** with **0 failures**. This report covers upgrades from v0.2.0 through v0.3.2, re-verification of all previously identified issues, and the library's fixes for 2 of our 3 Recommendations (BUG-001, WARN-003) plus WARN-002 documentation clarification.
 
 | Metric | Value |
 |--------|-------|
 | Total tests run | 485 |
 | Passed | 485 (100%) |
 | Failed | 0 |
-| Library bugs found | 1 |
-| Design warnings | 4 |
+| Library bugs found (v0.2.0) | 1 |
+| Bugs fixed (v0.3.2) | 1 |
+| Design warnings (v0.2.0) | 4 |
+| Design warnings remaining (v0.3.2) | 2 |
 | Test categories | 6 |
 
 ---
 
-## What Changed: v0.2.0 → v0.3.1
+## What Changed: v0.2.0 → v0.3.2
 
-### Breaking API Changes
+### v0.3.0: Breaking API change
 
-| Method (v0.2.0) | Method (v0.3.1) | Notes |
-|------------------|-----------------|-------|
+| Method (v0.2.0) | Method (v0.3.0+) | Notes |
+|------------------|-------------------|-------|
 | `IndexMap::extend(arr)` | `IndexMap::extend_from_array(arr)` | `extend` is now a reserved keyword |
 | `IndexSet::extend(arr)` | `IndexSet::extend_from_array(arr)` | Same rename |
 
-### Internal Changes (affect test assertions)
+### v0.3.1: Toolchain migration
 
 | Change | Detail |
 |--------|--------|
-| `inspect` → `debug_inspect` | Library migrated all test assertions; our suite followed suit. Snapshots now use `Debug` rendering. |
-| `Show::to_string` → `@debug.to_string` | `ToJson` impl changed key serialization internally. JSON output format unchanged for standard key types. |
-| `VERSION` constant | `"0.2.0"` → `"0.3.1"` |
+| `inspect` → `debug_inspect` | Library migrated all test assertions; our suite followed suit |
+| `Show::to_string` → `@debug.to_string` | `ToJson` impl changed key serialization internally |
+| Gotchas section added | Library README acknowledged all 5 issues found by our suite |
 
-### v0.3.1 Gotchas (documented in library README)
+### v0.3.2: Bug fixes from our Recommendations
 
-The library now acknowledges all issues found by our v0.2.0 test suite in its README Gotchas section (5 entries). **None of these issues have been fixed in v0.3.1** — they remain as documented known limitations.
+| Fix | Detail | Source diff |
+|-----|--------|-------------|
+| **BUG-001 fixed** | `contains(key)` guard in `get_mut` `None` branch — tombstone skipped if key was re-inserted by callback | `src/map.mbt:476` +6 lines |
+| **WARN-003 fixed** | New internal `recalc_max_probe()` helper called at end of `sort_by_key()` and `sort_by()` | `src/map.mbt:924-942` |
+| **WARN-002 clarified** | README Gotcha #3 self-contradiction removed | `README.md` |
+| New regression tests | `get_mut callback re-inserts same key then None preserves value`, `sort_by_key refreshes max_probe` | `src/map_test.mbt` +32 lines |
+
+### v0.3.2: Issues remaining
+
+| Issue | Status |
+|-------|--------|
+| WARN-001: `Eq`/`Hash` insertion-order-sensitive | Still present — design choice inherited from Rust indexmap |
+| WARN-004: Iterator mutation causes crash | Still present — fail-fast, preferable to silent corruption |
+| WARN-002: `swap_remove_index` naming | README clarified; implementation unchanged |
 
 ---
 
@@ -167,7 +182,7 @@ MoonBit currently lacks native thread-level concurrency. Within the single-threa
 - **Root cause**: `insert()` in callback updates the bucket entry, then callback returns `None`, causing `get_mut` to overwrite the bucket with a tombstone
 - **Workaround**: Do not combine same-key `insert` + `None` return in `get_mut` callbacks. Use `Some(new_val)` to update in-place instead.
 - **Test location**: `tests/comprehensive_test.mbt` line ~296
-- **v0.3.1 status**: **Still present** — documented as library README Gotcha #1
+- **v0.3.2 status**: **✅ Fixed** — `contains(key)` guard added in the `None` branch of `get_mut`. New library regression test confirms.
 
 ### 5.2 🟡 Design Warnings (4)
 
@@ -176,22 +191,22 @@ MoonBit currently lacks native thread-level concurrency. Within the single-threa
 Unlike MoonBit's built-in `Map[K, V]`, IndexMap's `Eq` compares entries in insertion order. Two maps with identical key-value pairs but different insertion orders are **not equal** and produce **different hashes**. This affects `IndexSet` equally.
 
 *Impact*: Cannot use IndexMap/IndexSet as keys in hash-based containers if insertion order is not guaranteed identical.
-**v0.3.1 status**: **Still present** — documented as library README Gotcha #2
+**v0.3.2 status**: **Still present** — design choice inherited from Rust indexmap
 
 **WARN-002: `swap_remove_index` name is misleading**
 
 The method name suggests O(1) swap-with-last-element removal, but the implementation calls `remove(key)` → `remove_from_order` which is an O(n) shift-remove that **preserves insertion order**. The behavior is correct but the name implies different performance characteristics.
-**v0.3.1 status**: **Still present** — documented as library README Gotcha #3
+**v0.3.2 status**: **README clarified** — self-contradictory sentence removed from Gotcha #3
 
 **WARN-003: `max_probe_distance` stale after `sort_by_key` / `sort_by`**
 
 Sorting rebuilds `order[]` and `positions[]` but does not rebuild `buckets[]` or recalculate `max_probe_distance`. The reported value reflects the pre-sort bucket layout.
-**v0.3.1 status**: **Still present** — documented as library README Gotcha #4
+**v0.3.2 status**: **✅ Fixed** — explicit `recalc_max_probe()` called after `sort_by_key()` and `sort_by()`
 
 **WARN-004: Iterator mutation is fail-fast (crash), not silent corruption**
 
 Creating an iterator and then mutating the map (insert/remove) before consuming the iterator causes an out-of-bounds array access crash. This is preferable to silent data corruption, but users must be aware that iterators and mutations cannot be interleaved.
-**v0.3.1 status**: **Still present** — documented as library README Gotcha #5
+**v0.3.2 status**: **Still present** — fail-fast is a deliberate design choice
 
 ### 5.3 🟢 Confirmed Correct
 
@@ -244,11 +259,13 @@ moon run cmd/lru_cache
 
 ## 8. Recommendations
 
-### For Library Maintainers
+### For Library Maintainers (v0.3.2 status)
 
-1. **Fix BUG-001**: Add a guard in `get_mut` to detect when the callback has re-inserted the same key and skip the tombstone placement. This is the only actual correctness bug — the others are documented design choices.
-2. **Fix WARN-003**: Recalculate `max_probe_distance` after `sort_by_key` / `sort_by`. (Note: WARN-001, WARN-002, WARN-004 have been addressed via the Gotchas section added in v0.2.1 — acknowledged as known limitations.)
-3. **Clarify WARN-002**: The README Gotcha #3 text contradicts itself ("it is order-breaking by name, but the implementation currently preserves order"). Pick one semantics and document it clearly.
+1. ~~**Fix BUG-001**~~ — **✅ Done in v0.3.2**: `contains(key)` guard added in `get_mut` `None` branch.
+2. ~~**Fix WARN-003**~~ — **✅ Done in v0.3.2**: `recalc_max_probe()` added after `sort_by_key`/`sort_by`.
+3. ~~**Clarify WARN-002**~~ — **✅ Done in v0.3.2**: README Gotcha #3's self-contradictory sentence removed.
+4. **WARN-001 (Eq/Hash order-sensitive)**: Acknowledge as a permanent design choice — it's inherited from Rust's indexmap and documented. Not recommended to change; would break the API contract.
+5. **WARN-004 (Iterator safety)**: Consider adding a runtime check that panics with a clear message ("map mutated during iteration") rather than an OOB crash. The fail-fast behavior is correct; the *error message* could be improved.
 
 ### For Users
 
