@@ -1,26 +1,27 @@
 # indexmap-test-suite
 
-Independent black-box test suite for [`aurasuisui/indexmap`](https://github.com/aurasuisui/moonbit-indexmap) v0.2.0 — a MoonBit port of Rust's `indexmap` crate that provides a hash map preserving insertion order.
+Independent black-box test suite for [`aurasuisui/indexmap`](https://github.com/aurasuisui/moonbit-indexmap) v0.3.1 — a MoonBit port of Rust's `indexmap` crate that provides a hash map preserving insertion order.
 
 ## Overview
 
 This repository is a **standalone test project** that consumes `aurasuisui/indexmap` as an external dependency (via `moon.work` workspace). It does not contain any library code — only tests and one runnable example.
 
-**Test count**: 232 black-box tests (plus the library's own 253 unit/property/bench tests = 485 total verified).
+**Test count**: 485 total tests (232 black-box + 253 library self-tests), all passing.
 
 ## Project Structure
 
 ```
 indexmap-test-suite/
-├── moon.mod                  # Module config — declares dependency on aurasuisui/indexmap@0.2.0
-├── moon.pkg                  # Package config — imports @indexmap alias
-├── moon.work                 # Workspace config — links local ../0.2.0 as dependency
+├── moon.mod                  # Module config — declares dependency on aurasuisui/indexmap@0.3.1
+├── moon.pkg                  # Package config
+├── moon.work                 # Workspace config — links local ../moonbit-indexmap as dependency
 ├── .gitignore
 ├── LICENSE
 ├── README.md                 # This file
 ├── TEST_REPORT.md            # Detailed test findings and analysis
 │
 ├── tests/                    # All black-box test files
+│   ├── moon.pkg              # Test package — imports @indexmap alias
 │   ├── api_test.mbt          # (89 tests) README API coverage — every documented method
 │   ├── stress_test.mbt       # (72 tests) Robustness, concurrency, memory, edge cases
 │   ├── trap_test.mbt         # (39 tests) Hidden traps, misleading semantics, gotcha discovery
@@ -45,11 +46,11 @@ indexmap-test-suite/
 
 ### Prerequisites
 
-- MoonBit toolchain (`moon` CLI) — tested with `moon 0.1.20260629`
+- MoonBit toolchain (`moon` CLI) — tested with `moon 0.1.20260710`
 - This repo and `aurasuisui/indexmap` source side-by-side:
   ```
   moon-dev/
-  ├── 0.2.0/                 # aurasuisui/indexmap source
+  ├── moonbit-indexmap/          # aurasuisui/indexmap source (v0.3.1)
   └── indexmap-test-suite/   # this repo
   ```
 
@@ -58,15 +59,16 @@ indexmap-test-suite/
 ```bash
 cd indexmap-test-suite
 moon check      # Type-check (0 errors)
-moon test       # Run all 232 tests
+moon test       # Run all 485 tests (232 from this suite + 253 library self-tests)
 ```
 
 ### Run Specific Test Category
 
+Use the MoonBit test filter syntax:
 ```bash
-moon test --test-filter "stress:"   # Only stress tests
-moon test --test-filter "TRAP:"     # Only trap tests
-moon test --test-filter "get_mut"   # Tests mentioning get_mut
+moon test tests/api_test      # Only API tests
+moon test tests/stress_test   # Only stress tests
+moon test tests/trap_test     # Only trap tests
 ```
 
 ### Run the LRU Cache Example
@@ -97,6 +99,8 @@ d => delta
 - See `tests/comprehensive_test.mbt` line ~296 for the reproduction test.
 - See `TEST_REPORT.md` BUG-001 for detailed analysis.
 
+**v0.3.1 status**: Still present. Listed as Gotcha #1 in the library's README.
+
 ### 🟡 Design Warnings
 
 | # | Issue | Detail |
@@ -112,7 +116,7 @@ d => delta
 - Handles 100,000+ entries with stable resize/rehash
 - Copy semantics are fully independent (concurrency-safe via isolation)
 - All edge values (0, -1, MIN/MAX, empty string, huge strings) handled safely
-- Custom `struct` keys with `derive(Hash, Eq, Compare, Show, Debug)` work across module boundaries
+- Custom `struct` keys with `derive(Hash, Eq, Compare, Debug)` work across module boundaries
 - `Bool`/`Char` key types (high collision potential) behave correctly
 
 ## Dependency Setup
@@ -123,18 +127,18 @@ This project uses MoonBit's `moon.work` workspace mechanism to reference the loc
 # moon.work
 members = [
   ".",
-  "../0.2.0",
+  "../moonbit-indexmap",
 ]
 ```
 
 ```toml
 # moon.mod
 import {
-  "aurasuisui/indexmap@0.2.0",
+  "aurasuisui/indexmap@0.3.1",
 }
 ```
 
-All test files access the library via the `@indexmap` alias declared in `moon.pkg`.
+All test files access the library via the `@indexmap` alias declared in `tests/moon.pkg`.
 
 ## Production Readiness
 
@@ -151,6 +155,19 @@ All test files access the library via the `@indexmap` alias declared in `moon.pk
 | Test Coverage | ⭐⭐⭐⭐⭐ |
 
 **Overall: Production-ready for single-threaded use.** For detailed analysis, see [TEST_REPORT.md](TEST_REPORT.md).
+
+## v0.2.0 → v0.3.1 Changes
+
+Our test suite was upgraded from targeting v0.2.0 to v0.3.1. Key changes:
+
+| Change | Impact on tests |
+|--------|----------------|
+| `extend` → `extend_from_array` (breaking) | 6 call sites renamed; `extend` is now a reserved keyword |
+| `inspect` → `debug_inspect` migration | ~523 assert sites migrated; snapshots updated via `moon test -u` |
+| `Show::to_string` → `@debug.to_string` (ToJson impl) | JSON serialization tests updated; output format unchanged |
+| `VERSION` constant: "0.2.0" → "0.3.1" | Version assertions updated |
+| Examples in `cmd/` packages | LRU cache example kept; library's other examples not duplicated |
+| 5 gotchas documented in library README | All 1 bug + 4 warnings confirmed still present in v0.3.1 |
 
 ## License
 

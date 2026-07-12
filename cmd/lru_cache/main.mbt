@@ -1,6 +1,6 @@
 // Example: Simple LRU (Least Recently Used) cache built on IndexMap.
 //
-// Adapted from aurasuisui/indexmap v0.2.0 examples/lru_cache.mbt
+// Adapted from aurasuisui/indexmap v0.3.1 cmd/lru_cache/main.mbt
 // Verified as a black-box consumer of the @indexmap dependency.
 
 ///|

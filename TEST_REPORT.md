@@ -1,15 +1,15 @@
-# Test Report — aurasuisui/indexmap v0.2.0
+# Test Report — aurasuisui/indexmap v0.3.1
 
-**Date**: 2026-07-05
+**Date**: 2026-07-12
 **Test Suite**: indexmap-test-suite (independent black-box)
-**Toolchain**: moon 0.1.20260629
-**Library Under Test**: [aurasuisui/indexmap](https://github.com/aurasuisui/moonbit-indexmap) v0.2.0
+**Toolchain**: moon 0.1.20260710
+**Library Under Test**: [aurasuisui/indexmap](https://github.com/aurasuisui/moonbit-indexmap) v0.3.1
 
 ---
 
 ## Executive Summary
 
-`aurasuisui/indexmap` v0.2.0 passed **485 total tests** with **0 failures**. The library is production-ready for single-threaded use cases, with one confirmed bug in an edge-case `get_mut` nesting pattern and four design warnings that users should be aware of.
+`aurasuisui/indexmap` v0.3.1 passed **485 total tests** with **0 failures**. This report covers the upgrade from v0.2.0 to v0.3.1, re-verification of all previously identified issues, and changes stemming from the library's `inspect`→`debug_inspect` migration and `extend`→`extend_from_array` rename.
 
 | Metric | Value |
 |--------|-------|
@@ -19,6 +19,29 @@
 | Library bugs found | 1 |
 | Design warnings | 4 |
 | Test categories | 6 |
+
+---
+
+## What Changed: v0.2.0 → v0.3.1
+
+### Breaking API Changes
+
+| Method (v0.2.0) | Method (v0.3.1) | Notes |
+|------------------|-----------------|-------|
+| `IndexMap::extend(arr)` | `IndexMap::extend_from_array(arr)` | `extend` is now a reserved keyword |
+| `IndexSet::extend(arr)` | `IndexSet::extend_from_array(arr)` | Same rename |
+
+### Internal Changes (affect test assertions)
+
+| Change | Detail |
+|--------|--------|
+| `inspect` → `debug_inspect` | Library migrated all test assertions; our suite followed suit. Snapshots now use `Debug` rendering. |
+| `Show::to_string` → `@debug.to_string` | `ToJson` impl changed key serialization internally. JSON output format unchanged for standard key types. |
+| `VERSION` constant | `"0.2.0"` → `"0.3.1"` |
+
+### v0.3.1 Gotchas (documented in library README)
+
+The library now acknowledges all issues found by our v0.2.0 test suite in its README Gotchas section (5 entries). **None of these issues have been fixed in v0.3.1** — they remain as documented known limitations.
 
 ---
 
@@ -32,7 +55,7 @@
 | `tests/stress_test.mbt` | 72 | Robustness, concurrency safety, memory efficiency, edge cases |
 | `tests/trap_test.mbt` | 39 | Hidden traps, misleading semantics, design gotchas |
 | `tests/comprehensive_test.mbt` | 32 | Custom key types, resize cascade, `get_mut` nesting, alternate key types |
-| Library self-tests (in `../0.2.0/src/`) | 253 | Unit tests, property tests, benchmark tests, QuickCheck |
+| Library self-tests (in `../moonbit-indexmap/src/`) | 253 | Unit tests, property tests, benchmark tests, QuickCheck |
 | **Total** | **485** | |
 
 ### 1.2 Runnable Example
@@ -54,7 +77,7 @@
 | Index | `get_index(i)`, `get_full(k)`, `get_index_of(k)`, `first()`, `last()`, `pop()`, `swap_remove_index(i)` | 7 |
 | Capacity | `reserve(n)`, `shrink_to_fit()` | 2 |
 | Iterate | `iter()`, `keys()`, `values()`, `for_each(f)`, `into_iter()`, `into_array()` | 6 |
-| Bulk | `retain(f)`, `sort_by_key()`, `sort_by(cmp)`, `drain()`, `extend(entries)` | 5 |
+| Bulk | `retain(f)`, `sort_by_key()`, `sort_by(cmp)`, `drain()`, `extend_from_array(entries)` | 5 |
 | Traits | `Show`, `Debug`, `Eq`, `Hash`, `Default`, `ToJson` | 6 |
 
 ### 2.2 IndexSet[K] — 100% Coverage
@@ -64,7 +87,7 @@
 | Construct | `new()`, `with_capacity(n)`, `from_array(elements)`, `default()`, `copy()` | 5 |
 | Core | `insert(v)`, `contains(v)`, `remove(v)`, `clear()`, `len()`, `is_empty()` | 6 |
 | Set ops | `is_disjoint(other)`, `is_subset(other)`, `is_superset(other)` | 3 |
-| Bulk | `retain(f)`, `drain()`, `extend(elements)`, `into_array()` | 4 |
+| Bulk | `retain(f)`, `drain()`, `extend_from_array(elements)`, `into_array()` | 4 |
 | Traits | `Show`, `Debug`, `Eq`, `Hash`, `Default`, `ToJson` | 6 |
 | Iteration | `iter()` with order preservation | 1 |
 
@@ -113,7 +136,7 @@
 | `""` (empty string) | String key / value | ✅ Pass |
 | `true` / `false` | Bool key (2-value domain) | ✅ Pass |
 | `'a'` / `'z'` / `'0'` | Char key | ✅ Pass |
-| Custom struct | `derive(Hash, Eq, Compare, Show, Debug)` key | ✅ Pass |
+| Custom struct | `derive(Hash, Eq, Compare, Debug)` key | ✅ Pass |
 
 ---
 
@@ -144,6 +167,7 @@ MoonBit currently lacks native thread-level concurrency. Within the single-threa
 - **Root cause**: `insert()` in callback updates the bucket entry, then callback returns `None`, causing `get_mut` to overwrite the bucket with a tombstone
 - **Workaround**: Do not combine same-key `insert` + `None` return in `get_mut` callbacks. Use `Some(new_val)` to update in-place instead.
 - **Test location**: `tests/comprehensive_test.mbt` line ~296
+- **v0.3.1 status**: **Still present** — documented as library README Gotcha #1
 
 ### 5.2 🟡 Design Warnings (4)
 
@@ -152,18 +176,22 @@ MoonBit currently lacks native thread-level concurrency. Within the single-threa
 Unlike MoonBit's built-in `Map[K, V]`, IndexMap's `Eq` compares entries in insertion order. Two maps with identical key-value pairs but different insertion orders are **not equal** and produce **different hashes**. This affects `IndexSet` equally.
 
 *Impact*: Cannot use IndexMap/IndexSet as keys in hash-based containers if insertion order is not guaranteed identical.
+**v0.3.1 status**: **Still present** — documented as library README Gotcha #2
 
 **WARN-002: `swap_remove_index` name is misleading**
 
 The method name suggests O(1) swap-with-last-element removal, but the implementation calls `remove(key)` → `remove_from_order` which is an O(n) shift-remove that **preserves insertion order**. The behavior is correct but the name implies different performance characteristics.
+**v0.3.1 status**: **Still present** — documented as library README Gotcha #3
 
 **WARN-003: `max_probe_distance` stale after `sort_by_key` / `sort_by`**
 
 Sorting rebuilds `order[]` and `positions[]` but does not rebuild `buckets[]` or recalculate `max_probe_distance`. The reported value reflects the pre-sort bucket layout.
+**v0.3.1 status**: **Still present** — documented as library README Gotcha #4
 
 **WARN-004: Iterator mutation is fail-fast (crash), not silent corruption**
 
 Creating an iterator and then mutating the map (insert/remove) before consuming the iterator causes an out-of-bounds array access crash. This is preferable to silent data corruption, but users must be aware that iterators and mutations cannot be interleaved.
+**v0.3.1 status**: **Still present** — documented as library README Gotcha #5
 
 ### 5.3 🟢 Confirmed Correct
 
@@ -172,8 +200,8 @@ Creating an iterator and then mutating the map (insert/remove) before consuming 
 - `sort_by_key` and `sort_by` correctly reorder entries
 - `ToJson` preserves insertion order in JSON output
 - Entry API (`OccupiedEntry` / `VacantEntry`) correctly handles in-place manipulation
-- `retain` + `drain` + `extend` bulk operations are correct
-- All trait implementations (`Show`, `Debug`, `Eq`, `Hash`, `Default`, `ToJson`) function correctly
+- `retain` + `drain` + `extend_from_array` bulk operations are correct
+- All trait implementations (`Debug`, `Eq`, `Hash`, `Default`, `ToJson`) function correctly
 - `with_capacity(0)`, `with_capacity(1)`, `with_capacity(1000000)` all produce valid maps
 - `shrink_to_fit` on empty and populated maps works correctly
 - Custom struct keys with derived traits work across module boundaries
@@ -191,7 +219,7 @@ Creating an iterator and then mutating the map (insert/remove) before consuming 
 | **Edge Case Handling** | ⭐⭐⭐⭐⭐ | All boundary values handled safely |
 | **Concurrency Safety** | ⭐⭐⭐⭐ | Copy isolation works; iterator mutation crashes cleanly |
 | **API Design Clarity** | ⭐⭐⭐ | `swap_remove_index` misleading; `get_mut` semantics need docs |
-| **Documentation** | ⭐⭐⭐⭐ | README clear; gotchas should be added |
+| **Documentation** | ⭐⭐⭐⭐ | README clear; gotchas added in v0.2.1 as acknowledged |
 | **Test Coverage** | ⭐⭐⭐⭐⭐ | 485 tests with 100% API coverage |
 
 **Overall: Production-ready for single-threaded use.** The library is suitable for configuration parsing, LRU caches, ordered JSON serialization, deterministic testing, and message deduplication. Users should be aware of the order-sensitive `Eq`/`Hash` semantics and avoid interleaving iterator use with map mutations.
@@ -202,10 +230,10 @@ Creating an iterator and then mutating the map (insert/remove) before consuming 
 
 ```bash
 cd indexmap-test-suite
-moon check    # 0 errors (deprecation warnings only from library)
-moon test     # 253 tests from indexmap-test-suite
-               # + 232 tests from library self-tests
-               # = 485 total, 0 failed
+moon check    # 0 errors
+moon test     # 232 tests from indexmap-test-suite
+              # + 253 tests from library self-tests
+              # = 485 total, 0 failed
 
 # Runnable example
 moon run cmd/lru_cache
@@ -218,11 +246,9 @@ moon run cmd/lru_cache
 
 ### For Library Maintainers
 
-1. **Fix BUG-001**: Add a guard in `get_mut` to detect when the callback has re-inserted the same key and skip the tombstone placement
-2. **Document WARN-001**: Add a "Gotchas" section in README explaining order-sensitive `Eq`/`Hash`
-3. **Rename or document WARN-002**: Clarify that `swap_remove_index` is order-preserving (shift-remove), not swap-remove
-4. **Fix WARN-003**: Recalculate `max_probe_distance` after `sort_by_key` / `sort_by`
-5. **Document WARN-004**: Add iterator safety note: "Do not mutate the map while an iterator is active"
+1. **Fix BUG-001**: Add a guard in `get_mut` to detect when the callback has re-inserted the same key and skip the tombstone placement. This is the only actual correctness bug — the others are documented design choices.
+2. **Fix WARN-003**: Recalculate `max_probe_distance` after `sort_by_key` / `sort_by`. (Note: WARN-001, WARN-002, WARN-004 have been addressed via the Gotchas section added in v0.2.1 — acknowledged as known limitations.)
+3. **Clarify WARN-002**: The README Gotcha #3 text contradicts itself ("it is order-breaking by name, but the implementation currently preserves order"). Pick one semantics and document it clearly.
 
 ### For Users
 
