@@ -21,6 +21,10 @@ struct UserRecord {
   id : Int
   name : String
 } derive(Debug, Eq, Hash, Compare)
+// NOTE: UserRecord intentionally does NOT derive Show. As of v0.3.3, IndexMap's
+// ToJson impl is bounded on K:Show, so calling to_json() on an
+// IndexMap[UserRecord, _] would be a compile error. Add Show to the derive list
+// if JSON output for custom-struct keys is ever needed.
 
 ///|
 test "custom struct as IndexMap key — basic insert/get" {
@@ -32,9 +36,12 @@ test "custom struct as IndexMap key — basic insert/get" {
   debug_inspect(map.len(), content="2")
   // keys with same fields == equal
   let alice2 = { id: 1, name: "Alice" }
-  debug_inspect(map.get(alice2), content=(
-    #|Some("admin")
-  ))
+  debug_inspect(
+    map.get(alice2),
+    content=(
+      #|Some("admin")
+    ),
+  )
 }
 
 ///|
@@ -89,12 +96,21 @@ test "custom struct as IndexSet key" {
 ///|
 test "custom struct with large field — IndexMap key" {
   let map = @indexmap.new()
-  let key = { id: 999, name: "a_very_long_name_for_stress_testing_hash_and_eq_traits" }
+  let key = {
+    id: 999,
+    name: "a_very_long_name_for_stress_testing_hash_and_eq_traits",
+  }
   map.insert(key, "found") |> ignore
-  let lookup = { id: 999, name: "a_very_long_name_for_stress_testing_hash_and_eq_traits" }
-  debug_inspect(map.get(lookup), content=(
-    #|Some("found")
-  ))
+  let lookup = {
+    id: 999,
+    name: "a_very_long_name_for_stress_testing_hash_and_eq_traits",
+  }
+  debug_inspect(
+    map.get(lookup),
+    content=(
+      #|Some("found")
+    ),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -297,27 +313,113 @@ test "get_mut nested: delete self via None then insert new entry" {
 }
 
 ///|
-test "get_mut nested: callback deletes then re-inserts same key (BUG-001 fixed in v0.3.2)" {
+test "get_mut: returning None removes the key even if the callback re-inserted it (v0.3.3)" {
   let map = @indexmap.new()
   map.insert("cycle", 5) |> ignore
   map.insert("other", 10) |> ignore
-  // Delete "cycle" and re-insert it with new value — both in the callback
+  // In the callback, re-insert "cycle" with a new value, then return None.
   map.get_mut("cycle", fn(v) {
     match v {
       Some(old) => {
         map.insert("cycle", old * 10) |> ignore
-        None // return None to request deletion
+        None // request deletion
       }
       None => None
     }
   })
-  // v0.3.2 fix: contains(key) guard in get_mut detects the re-insertion
-  // and skips the tombstone, so the re-inserted value survives.
-  debug_inspect(map.contains("cycle"), content="true")
-  debug_inspect(map.get("cycle"), content="Some(50)")
+  // v0.3.3: the callback's return value is authoritative and re-applied via a
+  // fresh insert/remove. Returning None calls remove(key) AFTER the callback
+  // runs, which undoes the callback's re-insertion — so the key is gone.
+  // (The v0.3.2 "preserve re-insert" behavior was removed; return Some(v) to
+  // keep a value.)
+  debug_inspect(map.contains("cycle"), content="false")
+  debug_inspect(map.get("cycle"), content="None")
   debug_inspect(map.contains("other"), content="true")
   debug_inspect(map.get("other"), content="Some(10)")
+  debug_inspect(map.len(), content="1")
+}
+
+///|
+test "get_mut: callback removes the same key then returns None — no double deletion (v0.3.3)" {
+  let map = @indexmap.new()
+  map.insert("a", 1) |> ignore
+  map.insert("b", 2) |> ignore
+  // Callback removes "a" itself, then returns None (which also calls remove("a")).
+  map.get_mut("a", fn(v) {
+    match v {
+      Some(_) => {
+        map.remove("a") |> ignore
+        None
+      }
+      None => None
+    }
+  })
+  // v0.3.3 re-applies None via a fresh remove, which is a no-op on an
+  // already-removed key — so len is decremented exactly once (no double len-- /
+  // double tombstone), and the other key is untouched.
+  debug_inspect(map.contains("a"), content="false")
+  debug_inspect(map.len(), content="1")
+  debug_inspect(map.get("b"), content="Some(2)")
+}
+
+///|
+test "get_mut: callback removes the same key then returns Some — no ghost entry (v0.3.3)" {
+  let map = @indexmap.new()
+  map.insert("a", 1) |> ignore
+  map.insert("b", 2) |> ignore
+  // Callback removes "a", then returns Some(99) (which calls insert("a", 99)).
+  map.get_mut("a", fn(v) {
+    match v {
+      Some(_) => {
+        map.remove("a") |> ignore
+        Some(99)
+      }
+      None => None
+    }
+  })
+  // v0.3.3 re-applies Some(99) via a fresh insert, re-adding "a" cleanly at the
+  // end of the order — no ghost/duplicate, fully iterable and indexable.
+  debug_inspect(map.get("a"), content="Some(99)")
   debug_inspect(map.len(), content="2")
+  let keys = map.keys().collect()
+  debug_inspect(
+    keys,
+    content=(
+      #|["b", "a"]
+    ),
+  )
+  debug_inspect(map.get_index_of("a"), content="Some(1)")
+}
+
+///|
+test "get_mut: callback triggers a resize mid-callback — value lands correctly (v0.3.3)" {
+  let map = @indexmap.new()
+  map.insert("anchor", 0) |> ignore
+  map.insert("target", 1) |> ignore
+  // In the callback for "target", insert enough NEW keys to cross the 0.75 load
+  // factor and force a resize (default capacity 16 resizes at ~12 entries).
+  map.get_mut("target", fn(v) {
+    match v {
+      Some(_) => {
+        let mut i = 0
+        while i < 30 {
+          map.insert("filler_\{i}", i) |> ignore
+          i = i + 1
+        }
+        Some(1234)
+      }
+      None => None
+    }
+  })
+  // v0.3.3 snapshots the current value BEFORE the callback and re-applies the
+  // result via a fresh probe, so the resize triggered inside the callback cannot
+  // cause a stale-index mis-write. "target" ends up with Some(1234).
+  debug_inspect(map.get("target"), content="Some(1234)")
+  debug_inspect(map.get("anchor"), content="Some(0)")
+  // 2 original + 30 fillers = 32 entries, all intact.
+  debug_inspect(map.len(), content="32")
+  debug_inspect(map.get("filler_0"), content="Some(0)")
+  debug_inspect(map.get("filler_29"), content="Some(29)")
 }
 
 // ---------------------------------------------------------------------------
@@ -393,12 +495,18 @@ test "Bool key: only two values — insert both" {
   map.insert(true, "yes") |> ignore
   map.insert(false, "no") |> ignore
   debug_inspect(map.len(), content="2")
-  debug_inspect(map.get(true), content=(
-    #|Some("yes")
-  ))
-  debug_inspect(map.get(false), content=(
-    #|Some("no")
-  ))
+  debug_inspect(
+    map.get(true),
+    content=(
+      #|Some("yes")
+    ),
+  )
+  debug_inspect(
+    map.get(false),
+    content=(
+      #|Some("no")
+    ),
+  )
 }
 
 ///|
@@ -407,9 +515,12 @@ test "Bool key: overwrite works correctly" {
   map.insert(true, "first") |> ignore
   map.insert(true, "second") |> ignore
   debug_inspect(map.len(), content="1")
-  debug_inspect(map.get(true), content=(
-    #|Some("second")
-  ))
+  debug_inspect(
+    map.get(true),
+    content=(
+      #|Some("second")
+    ),
+  )
 }
 
 ///|
@@ -443,12 +554,18 @@ test "Bool key: remove and re-insert" {
   map.insert(true, "t_reinserted") |> ignore
   // Re-inserted "true" moves to end
   let entries = map.iter().collect()
-  debug_inspect(entries[0], content=(
-    #|(false, "f")
-  ))
-  debug_inspect(entries[1], content=(
-    #|(true, "t_reinserted")
-  ))
+  debug_inspect(
+    entries[0],
+    content=(
+      #|(false, "f")
+    ),
+  )
+  debug_inspect(
+    entries[1],
+    content=(
+      #|(true, "t_reinserted")
+    ),
+  )
 }
 
 ///|
@@ -463,21 +580,31 @@ test "Char key: insert various characters" {
   debug_inspect(map.get('0'), content="Some(0)")
 }
 
+///|
 test "Char key: insert in order, verify order preserved" {
   let map = @indexmap.new()
   map.insert('c', "third") |> ignore
   map.insert('a', "first") |> ignore
   map.insert('b', "second") |> ignore
   let entries = map.iter().collect()
-  debug_inspect(entries[0].0, content=(
-    #|'c'
-  ))
-  debug_inspect(entries[1].0, content=(
-    #|'a'
-  ))
-  debug_inspect(entries[2].0, content=(
-    #|'b'
-  ))
+  debug_inspect(
+    entries[0].0,
+    content=(
+      #|'c'
+    ),
+  )
+  debug_inspect(
+    entries[1].0,
+    content=(
+      #|'a'
+    ),
+  )
+  debug_inspect(
+    entries[2].0,
+    content=(
+      #|'b'
+    ),
+  )
 }
 
 // ---------------------------------------------------------------------------

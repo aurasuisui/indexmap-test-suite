@@ -80,14 +80,20 @@ test "TRAP: sort_by recalculates max_probe after descending sort (v0.3.2 fix)" {
 }
 
 // ============================================================================
-// CATEGORY 2: Iterator Corruption / Dirty Reads
+// CATEGORY 2: Iterator Invalidation (true fail-fast since v0.3.3)
 //
-// The iterator closures capture `self.order` by reference and do
-// lazy lookups. If the map is mutated during iteration, the iterator
-// can skip entries or see stale data.
+// Each iterator (iter/keys/values) snapshots the map's mutation `version`
+// at creation. If the map is structurally modified before the iterator is
+// exhausted (insert/remove/clear/retain/sort_by*/reserve/shrink_to_fit, or
+// an Entry/get_mut mutation), the next `next()` aborts with
+// "IndexMap: map mutated during iteration". Earlier versions silently
+// skipped entries and could crash with an out-of-bounds access. The abort
+// is not catchable in an expect-test, so the tests below assert map state
+// or the safe "mutate first, then iterate" path, and document the abort.
 // ============================================================================
 
 ///|
+
 ///|
 test "TRAP: remove during iteration causes skips" {
   let map = @indexmap.new()
@@ -100,33 +106,49 @@ test "TRAP: remove during iteration causes skips" {
   let _iter = map.iter()
   // Remove a key that the iterator hasn't reached yet
   map.remove("d") |> ignore
-  // Now iterate — what happens?
-  // The iterator's closure walked past "a", "b", "c" to remove "d"
-  // which shifts the order[] array. The remaining elements after
-  // position of "d" shift left. But the iterator's pos cursor already
-  // points past the removed position in some cases. This is a CRASH:
-  // the iterator accesses order[] by index and the array has shrunk,
-  // so self.order[pos] is an out-of-bounds access => array throw.
-  // VERDICT: iterating while mutating is NOT safe. The iterator CRASHES,
-  // it doesn't silently return wrong data — which is actually the best
-  // failure mode for this scenario.
-  // We'll verify this by checking that the map still contains "e":
+  // v0.3.3: creating the iterator snapshots its mutation version; remove("d")
+  // bumps the map's version but does NOT itself abort. Because we never consume
+  // `_iter` here, no abort fires. Had we called _iter.next() now, it would abort
+  // with "IndexMap: map mutated during iteration" (true fail-fast). Earlier
+  // versions instead crashed with an out-of-bounds array access on consumption.
+  // We verify the map state is consistent after the mutation:
   debug_inspect(map.contains("e"), content="true")
   debug_inspect(map.len(), content="4")
 }
 
 ///|
-test "TRAP: insert during iteration may be seen or skipped" {
+test "iterator created after mutation sees the full mutated state (v0.3.3 fail-fast)" {
   let map = @indexmap.new()
   map.insert("a", 1) |> ignore
   map.insert("b", 2) |> ignore
-  let iter = map.iter()
-  // Insert after iter creation
+  // Finish ALL mutations BEFORE creating the iterator...
   map.insert("c", 3) |> ignore
+  let iter = map.iter()
   let collected = iter.collect()
-  // The inserted key might or might not appear depending on
-  // the lazy closure's behavior
-  debug_inspect(collected.length(), content="\{collected.length()}")
+  // ...and the iterator sees every entry, in insertion order.
+  debug_inspect(collected.length(), content="3")
+  debug_inspect(
+    collected[0].0,
+    content=(
+      #|"a"
+    ),
+  )
+  debug_inspect(
+    collected[1].0,
+    content=(
+      #|"b"
+    ),
+  )
+  debug_inspect(
+    collected[2].0,
+    content=(
+      #|"c"
+    ),
+  )
+  // v0.3.3 made iterators truly fail-fast: had we created `iter` BEFORE
+  // inserting "c" and then called collect(), the first next() would abort with
+  // "IndexMap: map mutated during iteration". That abort is not catchable in an
+  // expect-test, so we assert the safe contract here: mutate first, then iterate.
 }
 
 ///|
@@ -157,6 +179,7 @@ test "TRAP: into_iter next after all consumed returns None" {
 }
 
 ///|
+
 ///|
 test "TRAP: iter with size_hint but actual count differs after mutation" {
   let map = @indexmap.new()
@@ -167,17 +190,11 @@ test "TRAP: iter with size_hint but actual count differs after mutation" {
   let _iter = map.iter()
   // Remove a key BEFORE consuming the iterator
   map.remove("b") |> ignore
-  // Now iterate — the closure captures self.order by reference and
-  // self.order has been shift-removed down to ["a", "c"].
-  // But the pos cursor has already passed "b" if next() was called.
-  // Since we haven't called next() yet, pos=0 and will start from
-  // self.order[0]="a". But self.order.length()=2 so it won't crash.
-  // The len captured at creation was 3, so Iter won't try index 3.
-  // Actually: since we haven't consumed the iterator yet, pos=0.
-  // self.order[0]="a", self.order[1]="c". The len in closure = 3
-  // but order[] now has length 2. When pos=2, order[2] throws.
-  // VERDICT: same OOB crash as above. Iteration during mutation
-  // is unsafe.
+  // v0.3.3: remove("b") bumps the map's version but does not abort by itself.
+  // We never consume `_iter`, so no abort fires here. Had we called _iter.next(),
+  // it would abort with "IndexMap: map mutated during iteration" (true fail-fast).
+  // Earlier versions crashed with an out-of-bounds array access on consumption.
+  // The map state after the mutation is consistent:
   debug_inspect(map.len(), content="2")
   debug_inspect(map.contains("a"), content="true")
   debug_inspect(map.contains("c"), content="true")
@@ -227,9 +244,12 @@ test "TRAP: from_array with duplicate key — which position wins?" {
   // Is it at position 0 (first insert of "dup") or at some other position?
   let iter = map.iter()
   let collected = iter.collect()
-  debug_inspect(collected[0].0, content=(
-    #|"dup"
-  ))
+  debug_inspect(
+    collected[0].0,
+    content=(
+      #|"dup"
+    ),
+  )
   // Indeed: "dup" stays at its first insertion position (index 0),
   // keeping only the last value. This is correct per README but
   // unexpected: the VALUE is from the last insert, the POSITION
@@ -245,12 +265,18 @@ test "TRAP: remove then re-insert — is it same key or a new entry?" {
   map.insert("a", 10) |> ignore
   // "a" is now at the END (latest insert) — re-insert treats it as new
   let entries = map.iter().collect()
-  debug_inspect(entries[0], content=(
-    #|("b", 2)
-  ))
-  debug_inspect(entries[1], content=(
-    #|("a", 10)
-  ))
+  debug_inspect(
+    entries[0],
+    content=(
+      #|("b", 2)
+    ),
+  )
+  debug_inspect(
+    entries[1],
+    content=(
+      #|("a", 10)
+    ),
+  )
   // This is correct but means: an IndexMap has no "update" operation
   // that preserves position. `insert` an existing key keeps position.
   // But `remove` + `insert` moves it to the end.
@@ -276,30 +302,40 @@ test "TRAP: retain callback mutating other keys via map reference" {
 }
 
 // ============================================================================
-// CATEGORY 4: ToJson Key Collision
+// CATEGORY 4: ToJson Key Rendering
 //
-// ToJson uses @debug.to_string(k.to_json()) as the JSON object key.
-// If two different keys serialize to the same string, the later
-// one silently overwrites the earlier one in the JSON output.
+// Since v0.3.3, IndexMap's ToJson impl renders each object key via the
+// key's Show rendering (k.to_string()), matching moonbitlang/core's own
+// Map convention: a String key `name` becomes the raw JSON key "name"
+// (canonical), an Int key 42 becomes "42". The impl is bounded on K:Show.
+// (Earlier versions built keys via @debug.to_string(k.to_json()), which
+// mangled a String key into the literal object key String("name") and an
+// Int key into Number(42).) Insertion order is preserved in the output.
 // ============================================================================
 
 ///|
 test "TRAP: ToJson key collision when two keys stringify the same" {
   let map = @indexmap.new()
-  // Two different keys that produce the same @debug.to_string(to_json())
+  // Inserting the SAME key twice keeps a single entry (last value wins).
   map.insert("key", "first") |> ignore
   map.insert("key", "second") |> ignore
-  // This is harmless (same key), but let's check what happens:
   let json = map.to_json()
   let s = @debug.to_string(json)
   // "second" overwrites because it was inserted last
   debug_inspect(s.contains("second"), content="true")
   debug_inspect(map.len(), content="1")
+  // v0.3.3 (D3 fix): the object KEY is the key's Show rendering — the raw string
+  // "key" appears as a clean JSON key. Pre-fix the key was built via
+  // @debug.to_string(k.to_json()), mangling it into String("key"), so the
+  // contiguous substring "key" with clean surrounding quotes was absent.
+  // (Values still render in Debug constructor form, e.g. String("second"), so a
+  // bare contains("String(") cannot detect key mangling — we check the key form.)
+  debug_inspect(s.contains("\"key\""), content="true")
 }
 
 ///|
-test "TRAP: ToJson on IndexMap with non-string keys uses @debug.to_string" {
-  // Keys that are Int — the JSON object key becomes the string representation
+test "TRAP: ToJson on IndexMap with non-string keys renders keys via Show (v0.3.3)" {
+  // Int keys — the JSON object key is the Show rendering (decimal text).
   let map = @indexmap.new()
   map.insert(1, "one") |> ignore
   map.insert(2, "two") |> ignore
@@ -310,24 +346,40 @@ test "TRAP: ToJson on IndexMap with non-string keys uses @debug.to_string" {
   debug_inspect(s.contains("2"), content="true")
   debug_inspect(s.contains("one"), content="true")
   debug_inspect(s.contains("two"), content="true")
+  // v0.3.3 (D3 fix): Int keys render via Show as the clean JSON keys "1"/"2"
+  // (pre-fix they were mangled into Number(1) / Number(2)).
+  debug_inspect(s.contains("\"1\""), content="true")
+  debug_inspect(s.contains("\"2\""), content="true")
+  debug_inspect(s.contains("Number("), content="false")
 }
 
 ///|
-test "TRAP: ToJson with large number of entries — ordering preserved" {
+test "TRAP: ToJson preserves insertion order in JSON output (v0.3.3)" {
   let map = @indexmap.new()
   map.insert("zzz", "last_alphabetically") |> ignore
   map.insert("aaa", "first_alphabetically") |> ignore
   map.insert("mmm", "middle") |> ignore
   let json = map.to_json()
   let s = @debug.to_string(json)
-  // First key in JSON should be "zzz" (first inserted), not "aaa"
+  // Keys appear in INSERTION order (zzz, aaa, mmm), not alphabetical.
   let pos_zzz = s.find("zzz")
   let pos_aaa = s.find("aaa")
   let pos_mmm = s.find("mmm")
-  // All three keys present
   debug_inspect(pos_zzz is Some(_), content="true")
   debug_inspect(pos_aaa is Some(_), content="true")
   debug_inspect(pos_mmm is Some(_), content="true")
+  // Actually assert the order: zzz before aaa before mmm.
+  match (pos_zzz, pos_aaa, pos_mmm) {
+    (Some(z), Some(a), Some(m)) => {
+      debug_inspect(z < a, content="true")
+      debug_inspect(a < m, content="true")
+    }
+    _ => @test.fail("all three keys should be present")
+  }
+  // v0.3.3 (D3 fix): keys render via Show — the raw keys appear as clean JSON
+  // keys (pre-fix they were mangled into String("zzz") etc.).
+  debug_inspect(s.contains("\"zzz\""), content="true")
+  debug_inspect(s.contains("\"aaa\""), content="true")
 }
 
 // ============================================================================
@@ -419,6 +471,7 @@ test "TRAP: delete all entries one by one vs clear" {
   debug_inspect(map_b.get(9999), content="Some(42)")
 }
 
+///|
 test "TRAP: 80% deletion may not trigger rehash if tombstone ratio < 0.25 of CAPACITY" {
   // The rehash trigger is: tombstone_count * 4 > buckets.length() AND total > 0
   // So if we have a large capacity but few tombstones, rehash won't trigger
@@ -478,20 +531,32 @@ test "TRAP: swap_remove_index preserves order (O(n) shift-remove, not O(1) swap)
   // With TRUE swap-remove: elements after index 2 would shift
   // With shift-remove: order is preserved (a, b, d, e)
   debug_inspect(entries.length(), content="4")
-  debug_inspect(entries[0], content=(
-    #|("a", 1)
-  ))
-  debug_inspect(entries[1], content=(
-    #|("b", 2)
-  ))
+  debug_inspect(
+    entries[0],
+    content=(
+      #|("a", 1)
+    ),
+  )
+  debug_inspect(
+    entries[1],
+    content=(
+      #|("b", 2)
+    ),
+  )
   // If swap-remove: "e" would be at index 2
   // If shift-remove: "d" is at index 2
-  debug_inspect(entries[2], content=(
-    #|("d", 4)
-  ))
-  debug_inspect(entries[3], content=(
-    #|("e", 5)
-  ))
+  debug_inspect(
+    entries[2],
+    content=(
+      #|("d", 4)
+    ),
+  )
+  debug_inspect(
+    entries[3],
+    content=(
+      #|("e", 5)
+    ),
+  )
   // Result: it's shift-remove. Order preserved. Name is misleading.
 }
 
@@ -519,21 +584,38 @@ test "TRAP: swap_remove_index does NOT break order (documents actual behavior)" 
 
 // ============================================================================
 // CATEGORY 7: get_mut Semantic Edge Cases
+//
+// Since v0.3.3 the callback's return value is AUTHORITATIVE and re-applied
+// via a fresh insert/remove: Some(v) stores v under the key (inserting it if
+// it was absent — an upsert), and None removes the key (even if the callback
+// re-inserted it). The callback may safely mutate the map (including
+// triggering a resize). Earlier versions wrote back to a stale bucket index,
+// which could corrupt the table and silently broke plain deletion.
 // ============================================================================
 
 ///|
-test "TRAP: get_mut with key not present — callback receives None, cannot insert" {
+test "TRAP: get_mut on absent key — None is a no-op, Some(v) upserts (v0.3.3)" {
   let map = @indexmap.new()
-  // get_mut on a non-existing key
+  // get_mut on a non-existing key, callback returns None → stays absent.
   map.get_mut("ghost", fn(v) {
     match v {
       Some(x) => Some(x + 1)
-      None => Some(42) // User might expect this to INSERT the key
+      None => None
     }
   })
-  // The key was NOT inserted — get_mut only modifies EXISTING entries
   debug_inspect(map.contains("ghost"), content="false")
-  // This is correct per impl but misleading per the callback API
+  debug_inspect(map.len(), content="0")
+  // v0.3.3: returning Some(v) on an ABSENT key now INSERTS it (upsert),
+  // rather than discarding the value as earlier versions did.
+  map.get_mut("ghost", fn(v) {
+    match v {
+      Some(x) => Some(x + 1)
+      None => Some(42)
+    }
+  })
+  debug_inspect(map.contains("ghost"), content="true")
+  debug_inspect(map.get("ghost"), content="Some(42)")
+  debug_inspect(map.len(), content="1")
 }
 
 ///|
@@ -548,27 +630,36 @@ test "TRAP: get_mut deletion by returning None — key is removed from order" {
   debug_inspect(map.contains("b"), content="false")
   // "a" and "c" still present in order
   let entries = map.iter().collect()
-  debug_inspect(entries[0], content=(
-    #|("a", 1)
-  ))
-  debug_inspect(entries[1], content=(
-    #|("c", 3)
-  ))
+  debug_inspect(
+    entries[0],
+    content=(
+      #|("a", 1)
+    ),
+  )
+  debug_inspect(
+    entries[1],
+    content=(
+      #|("c", 3)
+    ),
+  )
 }
 
 ///|
-test "TRAP: get_mut on key that was already removed" {
+test "TRAP: get_mut on a removed key upserts when callback returns Some (v0.3.3)" {
   let map = @indexmap.new()
   map.insert("temp", 42) |> ignore
   map.remove("temp") |> ignore
-  // get_mut on an already-removed key
+  // get_mut on an already-removed key; callback receives None, returns Some(99).
   map.get_mut("temp", fn(v) {
     match v {
       Some(x) => Some(x * 2)
-      None => Some(99) // Won't be inserted
+      None => Some(99)
     }
   })
-  debug_inspect(map.contains("temp"), content="false")
+  // v0.3.3: Some(99) is re-applied via insert → the key is re-added (upsert).
+  debug_inspect(map.contains("temp"), content="true")
+  debug_inspect(map.get("temp"), content="Some(99)")
+  debug_inspect(map.len(), content="1")
 }
 
 // ============================================================================
@@ -585,22 +676,34 @@ test "TRAP: multiple iterators from same map are independent" {
   let iter_b = map.iter()
   // Each iterator is created fresh — independent closures
   match iter_a.next() {
-    Some((k, _)) => debug_inspect(k, content=(
-      #|"x"
-    ))
+    Some((k, _)) =>
+      debug_inspect(
+        k,
+        content=(
+          #|"x"
+        ),
+      )
     None => @test.fail("expected x")
   }
   match iter_b.next() {
-    Some((k, _)) => debug_inspect(k, content=(
-      #|"x"
-    ))
+    Some((k, _)) =>
+      debug_inspect(
+        k,
+        content=(
+          #|"x"
+        ),
+      )
     None => @test.fail("expected x")
   }
   // iter_a continues from where it left off
   match iter_a.next() {
-    Some((k, _)) => debug_inspect(k, content=(
-      #|"y"
-    ))
+    Some((k, _)) =>
+      debug_inspect(
+        k,
+        content=(
+          #|"y"
+        ),
+      )
     None => @test.fail("expected y")
   }
 }
@@ -742,7 +845,13 @@ test "TRAP: shrink_to_fit on map with exactly 16 entries" {
 
 ///|
 test "TRAP: from_array with all same key yields 1 element" {
-  let entries = [("only", 1), ("only", 2), ("only", 3), ("only", 4), ("only", 5)]
+  let entries = [
+    ("only", 1),
+    ("only", 2),
+    ("only", 3),
+    ("only", 4),
+    ("only", 5),
+  ]
   let map = @indexmap.IndexMap::from_array(entries)
   debug_inspect(map.len(), content="1")
   debug_inspect(map.get("only"), content="Some(5)")
@@ -757,9 +866,12 @@ test "TRAP: extend with all duplicates keeps first occurrence position" {
   debug_inspect(map.get("dup"), content="Some(3)")
   // The key "dup" is at the position of its FIRST insert
   let collected = map.iter().collect()
-  debug_inspect(collected[0].0, content=(
-    #|"dup"
-  ))
+  debug_inspect(
+    collected[0].0,
+    content=(
+      #|"dup"
+    ),
+  )
 }
 
 ///|
@@ -773,9 +885,12 @@ test "TRAP: extend after insert mixes correctly" {
   debug_inspect(map.get("pre"), content="Some(99)")
   // "pre" should still be at index 0 (first inserted before extend)
   let entries = map.iter().collect()
-  debug_inspect(entries[0], content=(
-    #|("pre", 99)
-  ))
+  debug_inspect(
+    entries[0],
+    content=(
+      #|("pre", 99)
+    ),
+  )
 }
 
 // ============================================================================
@@ -783,23 +898,31 @@ test "TRAP: extend after insert mixes correctly" {
 // ============================================================================
 
 ///|
-test "TRAP: OccupiedEntry on then-deleted key" {
+test "OccupiedEntry handle stays correct across a resize (v0.3.3 D1 fix)" {
   let map = @indexmap.new()
-  map.insert("key", 1) |> ignore
-  let entry_view = map.entry("key")
-  // Meanwhile, delete the key via the map directly
-  map.remove("key") |> ignore
-  // Now use the OccupiedEntry — what happens?
-  // The entry was captured BEFORE the remove, so it should still work
-  match entry_view {
+  map.insert("anchor", 42) |> ignore
+  match map.entry("anchor") {
     @indexmap.Occupied(e) => {
-      // The OccupiedEntry holds a snapshot reference
-      // But the bucket may now be a tombstone
-      // This tests whether OccupiedEntry is robust
-      let _val = e.get()
+      // Force several resizes with many OTHER inserts while holding the handle.
+      let mut i = 0
+      while i < 100 {
+        map.insert("k\{i}", i) |> ignore
+        i = i + 1
+      }
+      // v0.3.3: OccupiedEntry::get/insert re-probe BY KEY instead of trusting a
+      // stale cached bucket index, so the handle still resolves the right key
+      // after the table has been rebuilt by resizes.
+      debug_inspect(e.get(), content="42")
+      let old = e.insert(43)
+      debug_inspect(old, content="42")
+      debug_inspect(map.get("anchor"), content="Some(43)")
     }
-    @indexmap.Vacant(_) => ()
+    @indexmap.Vacant(_) => @test.fail("expected Occupied")
   }
+  // NOTE: using an OccupiedEntry whose key has since been REMOVED now aborts
+  // with "OccupiedEntry: key is no longer present in the map" (it re-probes by
+  // key and finds nothing). That abort is not catchable in an expect-test, so it
+  // is documented here rather than asserted.
 }
 
 ///|

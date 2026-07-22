@@ -1,5 +1,5 @@
 import {
   "moonbitlang/core/test",
   "moonbitlang/core/debug",
-  "aurasuisui/indexmap" @indexmap,
+  "aurasuisui/indexmap",
 }

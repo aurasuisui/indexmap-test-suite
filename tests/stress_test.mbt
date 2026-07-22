@@ -378,17 +378,24 @@ test "concurrency: iter + keys + values can coexist" {
   // Each advances independently
   match kv_iter.next() {
     Some((k, v)) => {
-      debug_inspect(k, content=(
-        #|"a"
-      ))
+      debug_inspect(
+        k,
+        content=(
+          #|"a"
+        ),
+      )
       debug_inspect(v, content="1")
     }
     None => @test.fail("expected (a, 1)")
   }
   match k_iter.next() {
-    Some(k) => debug_inspect(k, content=(
-      #|"a"
-    ))
+    Some(k) =>
+      debug_inspect(
+        k,
+        content=(
+          #|"a"
+        ),
+      )
     None => @test.fail("expected a")
   }
   match v_iter.next() {
@@ -533,7 +540,10 @@ test "memory: reserve grows capacity if needed" {
   let map = @indexmap.new()
   let cap_before = map.capacity()
   map.reserve(1000)
-  debug_inspect(map.capacity() >= 1000 || map.capacity() >= cap_before, content="true")
+  debug_inspect(
+    map.capacity() >= 1000 || map.capacity() >= cap_before,
+    content="true",
+  )
 }
 
 // ============================================================================
@@ -544,9 +554,12 @@ test "memory: reserve grows capacity if needed" {
 test "edge: zero as key" {
   let map = @indexmap.new()
   map.insert(0, "zero_val") |> ignore
-  debug_inspect(map.get(0), content=(
-    #|Some("zero_val")
-  ))
+  debug_inspect(
+    map.get(0),
+    content=(
+      #|Some("zero_val")
+    ),
+  )
   debug_inspect(map.contains(0), content="true")
 }
 
@@ -554,9 +567,12 @@ test "edge: zero as key" {
 test "edge: negative one as key" {
   let map = @indexmap.new()
   map.insert(-1, "neg_one") |> ignore
-  debug_inspect(map.get(-1), content=(
-    #|Some("neg_one")
-  ))
+  debug_inspect(
+    map.get(-1),
+    content=(
+      #|Some("neg_one")
+    ),
+  )
   map.remove(-1) |> ignore
   debug_inspect(map.contains(-1), content="false")
 }
@@ -567,12 +583,18 @@ test "edge: Int minimum and maximum as keys" {
   map.insert(-2147483648, "min") |> ignore
   map.insert(2147483647, "max") |> ignore
   debug_inspect(map.len(), content="2")
-  debug_inspect(map.get(-2147483648), content=(
-    #|Some("min")
-  ))
-  debug_inspect(map.get(2147483647), content=(
-    #|Some("max")
-  ))
+  debug_inspect(
+    map.get(-2147483648),
+    content=(
+      #|Some("min")
+    ),
+  )
+  debug_inspect(
+    map.get(2147483647),
+    content=(
+      #|Some("max")
+    ),
+  )
 }
 
 ///|
@@ -580,9 +602,12 @@ test "edge: empty string as key" {
   let map = @indexmap.new()
   map.insert("", "empty_key") |> ignore
   debug_inspect(map.len(), content="1")
-  debug_inspect(map.get(""), content=(
-    #|Some("empty_key")
-  ))
+  debug_inspect(
+    map.get(""),
+    content=(
+      #|Some("empty_key")
+    ),
+  )
   map.remove("") |> ignore
   debug_inspect(map.contains(""), content="false")
 }
@@ -591,9 +616,12 @@ test "edge: empty string as key" {
 test "edge: empty string as value" {
   let map = @indexmap.new()
   map.insert("k", "") |> ignore
-  debug_inspect(map.get("k"), content=(
-    #|Some("")
-  ))
+  debug_inspect(
+    map.get("k"),
+    content=(
+      #|Some("")
+    ),
+  )
 }
 
 ///|
@@ -677,15 +705,24 @@ test "edge: remove then re-insert moves to end" {
   map.insert("a", 10) |> ignore
   // "a" should be last
   let entries = map.iter().collect()
-  debug_inspect(entries[0], content=(
-    #|("b", 2)
-  ))
-  debug_inspect(entries[1], content=(
-    #|("c", 3)
-  ))
-  debug_inspect(entries[2], content=(
-    #|("a", 10)
-  ))
+  debug_inspect(
+    entries[0],
+    content=(
+      #|("b", 2)
+    ),
+  )
+  debug_inspect(
+    entries[1],
+    content=(
+      #|("c", 3)
+    ),
+  )
+  debug_inspect(
+    entries[2],
+    content=(
+      #|("a", 10)
+    ),
+  )
 }
 
 ///|
@@ -943,10 +980,13 @@ test "stress: IndexSet large-scale operations" {
 }
 
 ///|
-test "stress: VERSION constant is 0.3.2" {
-  debug_inspect(@indexmap.VERSION, content=(
-    #|"0.3.2"
-  ))
+test "stress: VERSION constant is 0.3.3" {
+  debug_inspect(
+    @indexmap.VERSION,
+    content=(
+      #|"0.3.3"
+    ),
+  )
 }
 
 // ============================================================================
@@ -1099,6 +1139,14 @@ test "trait: to_json on map with 1000 entries" {
   let last_key_pos = s.find("k999")
   debug_inspect(first_key_pos is Some(_), content="true")
   debug_inspect(last_key_pos is Some(_), content="true")
+  // v0.3.3: insertion order preserved (k0 before k999).
+  match (first_key_pos, last_key_pos) {
+    (Some(f), Some(l)) => debug_inspect(f < l, content="true")
+    _ => @test.fail("both keys should be present")
+  }
+  // D3 fix: the String keys render via Show as clean JSON keys ("k0"); pre-fix
+  // they were mangled into String("k0").
+  debug_inspect(s.contains("\"k0\""), content="true")
 }
 
 ///|
@@ -1154,6 +1202,7 @@ test "trait: IndexSet Show on empty set" {
   debug_inspect(s.contains("IndexSet"), content="true")
 }
 
+///|
 test "trait: IndexSet to_json empty set" {
   let set : @indexmap.IndexSet[String] = @indexmap.IndexSet::new()
   let json = set.to_json()

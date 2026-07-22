@@ -211,15 +211,24 @@ test "iteration preserves insertion order" {
     }
   }
   debug_inspect(result.length(), content="3")
-  debug_inspect(result[0], content=(
-    #|("b", 2)
-  ))
-  debug_inspect(result[1], content=(
-    #|("a", 1)
-  ))
-  debug_inspect(result[2], content=(
-    #|("c", 3)
-  ))
+  debug_inspect(
+    result[0],
+    content=(
+      #|("b", 2)
+    ),
+  )
+  debug_inspect(
+    result[1],
+    content=(
+      #|("a", 1)
+    ),
+  )
+  debug_inspect(
+    result[2],
+    content=(
+      #|("c", 3)
+    ),
+  )
 }
 
 // ===========================================================================
@@ -266,9 +275,13 @@ test "OccupiedEntry::key() returns key" {
   let map = @indexmap.new()
   map.insert("mykey", 5) |> ignore
   match map.entry("mykey") {
-    @indexmap.Occupied(e) => debug_inspect(e.key(), content=(
-      #|"mykey"
-    ))
+    @indexmap.Occupied(e) =>
+      debug_inspect(
+        e.key(),
+        content=(
+          #|"mykey"
+        ),
+      )
     @indexmap.Vacant(_) => @test.fail("expected Occupied")
   }
 }
@@ -291,10 +304,37 @@ test "VacantEntry::key() returns key" {
   let map : @indexmap.IndexMap[String, Int] = @indexmap.new()
   match map.entry("slot") {
     @indexmap.Occupied(_) => @test.fail("expected Vacant")
-    @indexmap.Vacant(e) => debug_inspect(e.key(), content=(
-      #|"slot"
-    ))
+    @indexmap.Vacant(e) =>
+      debug_inspect(
+        e.key(),
+        content=(
+          #|"slot"
+        ),
+      )
   }
+}
+
+///|
+test "Entry API: filling past capacity via VacantEntry::insert does not hang (v0.3.3 D1 fix)" {
+  let map : @indexmap.IndexMap[Int, Int] = @indexmap.new()
+  // Fill the map PURELY through the Entry API, crossing many resize boundaries
+  // (default capacity 16 → 32 → 64 → ...). Pre-v0.3.3, VacantEntry::insert
+  // skipped the resize gate, so this drove the table to 100% occupancy and the
+  // next insert spun forever in robin_hood_insert_at.
+  let mut i = 0
+  while i < 200 {
+    match map.entry(i) {
+      @indexmap.Occupied(_) => @test.fail("expected Vacant for a fresh key")
+      @indexmap.Vacant(e) => e.insert(i * 10) |> ignore
+    }
+    i = i + 1
+  }
+  // All 200 entries landed, the table grew well past the initial capacity, and
+  // the first/last keys are still retrievable.
+  debug_inspect(map.len(), content="200")
+  debug_inspect(map.capacity() > 16, content="true")
+  debug_inspect(map.get(0), content="Some(0)")
+  debug_inspect(map.get(199), content="Some(1990)")
 }
 
 // ===========================================================================
@@ -307,15 +347,24 @@ test "get_index(i) returns entry at insertion-order index" {
   map.insert("x", 10) |> ignore
   map.insert("y", 20) |> ignore
   map.insert("z", 30) |> ignore
-  debug_inspect(map.get_index(0), content=(
-    #|Some(("x", 10))
-  ))
-  debug_inspect(map.get_index(1), content=(
-    #|Some(("y", 20))
-  ))
-  debug_inspect(map.get_index(2), content=(
-    #|Some(("z", 30))
-  ))
+  debug_inspect(
+    map.get_index(0),
+    content=(
+      #|Some(("x", 10))
+    ),
+  )
+  debug_inspect(
+    map.get_index(1),
+    content=(
+      #|Some(("y", 20))
+    ),
+  )
+  debug_inspect(
+    map.get_index(2),
+    content=(
+      #|Some(("z", 30))
+    ),
+  )
 }
 
 ///|
@@ -330,9 +379,12 @@ test "get_index(i) out of bounds returns None" {
 test "get_full(k) returns Some((k, v)) for existing key" {
   let map = @indexmap.new()
   map.insert("full", 42) |> ignore
-  debug_inspect(map.get_full("full"), content=(
-    #|Some(("full", 42))
-  ))
+  debug_inspect(
+    map.get_full("full"),
+    content=(
+      #|Some(("full", 42))
+    ),
+  )
   debug_inspect(map.get_full("nope"), content="None")
 }
 
@@ -351,9 +403,12 @@ test "first() returns earliest inserted entry" {
   let map = @indexmap.new()
   map.insert("earliest", 1) |> ignore
   map.insert("later", 2) |> ignore
-  debug_inspect(map.first(), content=(
-    #|Some(("earliest", 1))
-  ))
+  debug_inspect(
+    map.first(),
+    content=(
+      #|Some(("earliest", 1))
+    ),
+  )
 }
 
 ///|
@@ -367,9 +422,12 @@ test "last() returns most recently inserted entry" {
   let map = @indexmap.new()
   map.insert("old", 1) |> ignore
   map.insert("newest", 2) |> ignore
-  debug_inspect(map.last(), content=(
-    #|Some(("newest", 2))
-  ))
+  debug_inspect(
+    map.last(),
+    content=(
+      #|Some(("newest", 2))
+    ),
+  )
 }
 
 ///|
@@ -384,9 +442,12 @@ test "pop() removes and returns last entry" {
   map.insert("a", 1) |> ignore
   map.insert("b", 2) |> ignore
   let popped = map.pop()
-  debug_inspect(popped, content=(
-    #|Some(("b", 2))
-  ))
+  debug_inspect(
+    popped,
+    content=(
+      #|Some(("b", 2))
+    ),
+  )
   debug_inspect(map.len(), content="1")
   debug_inspect(map.contains("b"), content="false")
 }
@@ -404,9 +465,12 @@ test "swap_remove_index(i) removes entry at position" {
   map.insert("b", 2) |> ignore
   map.insert("c", 3) |> ignore
   let removed = map.swap_remove_index(1)
-  debug_inspect(removed, content=(
-    #|Some(("b", 2))
-  ))
+  debug_inspect(
+    removed,
+    content=(
+      #|Some(("b", 2))
+    ),
+  )
   debug_inspect(map.len(), content="2")
   debug_inspect(map.contains("b"), content="false")
 }
@@ -478,12 +542,18 @@ test "keys() returns lazy iterator over keys" {
     }
   }
   debug_inspect(keys.length(), content="2")
-  debug_inspect(keys[0], content=(
-    #|"x"
-  ))
-  debug_inspect(keys[1], content=(
-    #|"y"
-  ))
+  debug_inspect(
+    keys[0],
+    content=(
+      #|"x"
+    ),
+  )
+  debug_inspect(
+    keys[1],
+    content=(
+      #|"y"
+    ),
+  )
 }
 
 ///|
@@ -571,15 +641,24 @@ test "sort_by_key() sorts entries by key" {
       None => break
     }
   }
-  debug_inspect(keys[0], content=(
-    #|"a"
-  ))
-  debug_inspect(keys[1], content=(
-    #|"m"
-  ))
-  debug_inspect(keys[2], content=(
-    #|"z"
-  ))
+  debug_inspect(
+    keys[0],
+    content=(
+      #|"a"
+    ),
+  )
+  debug_inspect(
+    keys[1],
+    content=(
+      #|"m"
+    ),
+  )
+  debug_inspect(
+    keys[2],
+    content=(
+      #|"z"
+    ),
+  )
 }
 
 ///|
@@ -597,15 +676,24 @@ test "sort_by(cmp) sorts entries by custom comparator" {
       None => break
     }
   }
-  debug_inspect(keys[0], content=(
-    #|"b"
-  ))
-  debug_inspect(keys[1], content=(
-    #|"c"
-  ))
-  debug_inspect(keys[2], content=(
-    #|"a"
-  ))
+  debug_inspect(
+    keys[0],
+    content=(
+      #|"b"
+    ),
+  )
+  debug_inspect(
+    keys[1],
+    content=(
+      #|"c"
+    ),
+  )
+  debug_inspect(
+    keys[2],
+    content=(
+      #|"a"
+    ),
+  )
 }
 
 ///|
@@ -688,6 +776,10 @@ test "ToJson trait: to_json() serializes preserving order" {
   debug_inspect(s.contains("test"), content="true")
   debug_inspect(s.contains("version"), content="true")
   debug_inspect(s.contains("1.0"), content="true")
+  // v0.3.3 (D3 fix): keys render via Show (raw strings) — the raw keys appear as
+  // clean JSON object keys (pre-fix they were mangled into String("name") etc.).
+  debug_inspect(s.contains("\"name\""), content="true")
+  debug_inspect(s.contains("\"version\""), content="true")
 }
 
 // ===========================================================================
@@ -696,9 +788,12 @@ test "ToJson trait: to_json() serializes preserving order" {
 
 ///|
 test "VERSION constant is defined" {
-  debug_inspect(@indexmap.VERSION, content=(
-    #|"0.3.2"
-  ))
+  debug_inspect(
+    @indexmap.VERSION,
+    content=(
+      #|"0.3.3"
+    ),
+  )
 }
 
 // ===========================================================================
@@ -899,15 +994,24 @@ test "IndexSet::iter() returns elements in insertion order" {
       None => break
     }
   }
-  debug_inspect(result[0], content=(
-    #|"b"
-  ))
-  debug_inspect(result[1], content=(
-    #|"a"
-  ))
-  debug_inspect(result[2], content=(
-    #|"c"
-  ))
+  debug_inspect(
+    result[0],
+    content=(
+      #|"b"
+    ),
+  )
+  debug_inspect(
+    result[1],
+    content=(
+      #|"a"
+    ),
+  )
+  debug_inspect(
+    result[2],
+    content=(
+      #|"c"
+    ),
+  )
 }
 
 // ===========================================================================
@@ -958,6 +1062,13 @@ test "IndexSet ToJson trait: to_json() serializes preserving order" {
   let s = @debug.to_string(json)
   debug_inspect(s.contains("alpha"), content="true")
   debug_inspect(s.contains("beta"), content="true")
+  // IndexSet serializes as a JSON ARRAY (not an object), in insertion order.
+  debug_inspect(s.contains("["), content="true")
+  debug_inspect(s.contains("]"), content="true")
+  match (s.find("alpha"), s.find("beta")) {
+    (Some(a), Some(b)) => debug_inspect(a < b, content="true")
+    _ => @test.fail("both elements should be present")
+  }
 }
 
 // ===========================================================================

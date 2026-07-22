@@ -1,62 +1,50 @@
-# Test Report — aurasuisui/indexmap v0.3.2
+# Test Report — aurasuisui/indexmap v0.3.3
 
-**Date**: 2026-07-12
+**Date**: 2026-07-22
 **Test Suite**: indexmap-test-suite (independent black-box)
 **Toolchain**: moon 0.1.20260710
-**Library Under Test**: [aurasuisui/indexmap](https://github.com/aurasuisui/moonbit-indexmap) v0.3.2
+**Library Under Test**: [aurasuisui/indexmap](https://github.com/aurasuisui/moonbit-indexmap) v0.3.3
 
 ---
 
 ## Executive Summary
 
-`aurasuisui/indexmap` v0.3.2 passed **485 total tests** with **0 failures**. This report covers upgrades from v0.2.0 through v0.3.2, re-verification of all previously identified issues, and the library's fixes for 2 of our 3 Recommendations (BUG-001, WARN-003) plus WARN-002 documentation clarification.
+`aurasuisui/indexmap` v0.3.3 passed **513 total tests** with **0 failures**. v0.3.3 was a
+post-acceptance quality pass that fixed four correctness defects (Entry-API expansion,
+`get_mut` deletion, JSON keys, iterator invalidation) and made two deliberate behavior
+changes. This suite was expanded from 232 to **236 black-box tests** to regression-test each
+fix, and the tests asserting the old (now-reversed) `get_mut` semantics were rewritten.
 
 | Metric | Value |
 |--------|-------|
-| Total tests run | 485 |
-| Passed | 485 (100%) |
+| Total tests run | 513 |
+| Passed | 513 (100%) |
 | Failed | 0 |
-| Library bugs found (v0.2.0) | 1 |
-| Bugs fixed (v0.3.2) | 1 |
-| Design warnings (v0.2.0) | 4 |
-| Design warnings remaining (v0.3.2) | 2 |
+| Black-box suite tests | 236 (was 232) |
+| Library self-tests | 277 (was 253) |
+| Library defects fixed in v0.3.3 | 4 (D1–D4) |
+| Deliberate behavior changes | 2 |
 | Test categories | 6 |
 
 ---
 
-## What Changed: v0.2.0 → v0.3.2
+## What Changed: v0.3.2 → v0.3.3
 
-### v0.3.0: Breaking API change
+### Four defects fixed (regression-tested by this suite)
 
-| Method (v0.2.0) | Method (v0.3.0+) | Notes |
-|------------------|-------------------|-------|
-| `IndexMap::extend(arr)` | `IndexMap::extend_from_array(arr)` | `extend` is now a reserved keyword |
-| `IndexSet::extend(arr)` | `IndexSet::extend_from_array(arr)` | Same rename |
+| # | Defect | Root cause → fix | Source |
+|---|--------|------------------|--------|
+| **D1** | **Entry API expansion could hang/corrupt** | `VacantEntry::insert` skipped the resize gate, so filling the table purely via the Entry API drove it to 100% and the next insert spun forever in `robin_hood_insert_at`. → `VacantEntry::insert` now delegates to the resize-aware `insert`; `OccupiedEntry::get`/`insert` re-probe by key instead of a stale cached `bucket_index` (field removed); `robin_hood_insert_at` gained a termination guard. | `src/map.mbt` 636-707 |
+| **D2** | **`get_mut` deletion silently corrupted** | The old code wrote back to a stale bucket index. → The callback's return value is now authoritative and re-applied via a fresh `insert`/`remove`: `Some(v)` stores `v` (inserting if absent), `None` removes the key. Fixes plain deletion (the v0.3.2 `contains` guard had made it a no-op), double-`len`/double-tombstone, ghost entries, and stale-index mis-writes on callback resize. | `src/map.mbt` 461-494 |
+| **D3** | **ToJson keys were mangled** | Keys were built via `@debug.to_string(k.to_json())`, rendering a String key `name` as the literal object key `String("name")`. → Keys now use `k.to_string()` (`Show`), matching core `Map`. **Breaking bound change:** `K:ToJson → K:Show`. | `src/map.mbt` 1150-1167 |
+| **D4** | **Iterators were not fail-fast** | Mutating mid-iteration silently skipped entries, then could crash OOB (README claimed fail-fast but it was not). → `iter`/`keys`/`values` snapshot a private mutation `version` and `abort("IndexMap: map mutated during iteration")` on the next `next()` after a structural change. | `src/map.mbt` 814-884 |
 
-### v0.3.1: Toolchain migration
+### Two deliberate behavior changes (our tests updated to match)
 
-| Change | Detail |
-|--------|--------|
-| `inspect` → `debug_inspect` | Library migrated all test assertions; our suite followed suit |
-| `Show::to_string` → `@debug.to_string` | `ToJson` impl changed key serialization internally |
-| Gotchas section added | Library README acknowledged all 5 issues found by our suite |
-
-### v0.3.2: Bug fixes from our Recommendations
-
-| Fix | Detail | Source diff |
-|-----|--------|-------------|
-| **BUG-001 fixed** | `contains(key)` guard in `get_mut` `None` branch — tombstone skipped if key was re-inserted by callback | `src/map.mbt:476` +6 lines |
-| **WARN-003 fixed** | New internal `recalc_max_probe()` helper called at end of `sort_by_key()` and `sort_by()` | `src/map.mbt:924-942` |
-| **WARN-002 clarified** | README Gotcha #3 self-contradiction removed | `README.md` |
-| New regression tests | `get_mut callback re-inserts same key then None preserves value`, `sort_by_key refreshes max_probe` | `src/map_test.mbt` +32 lines |
-
-### v0.3.2: Issues remaining
-
-| Issue | Status |
-|-------|--------|
-| WARN-001: `Eq`/`Hash` insertion-order-sensitive | Still present — design choice inherited from Rust indexmap |
-| WARN-004: Iterator mutation causes crash | Still present — fail-fast, preferable to silent corruption |
-| WARN-002: `swap_remove_index` naming | README clarified; implementation unchanged |
+| Change | Detail | Tests affected |
+|--------|--------|----------------|
+| **`get_mut` None-semantics reversed** | Returning `None` removes the key **even if the callback re-inserted it** (the v0.3.2 "preserve re-insert" behavior is gone — it is what broke plain deletion). `get_mut` on a missing key with `Some(v)` now **upserts**. | `comprehensive_test.mbt:300` inverted; `trap_test.mbt:549`/`:584` rewritten as upsert tests |
+| **`ToJson` bound `K:ToJson → K:Show`** | Technically breaking, but the old output was unusable. A custom-struct key must derive `Show` to be serializable. | No compile break (no test serializes a non-`Show` key); `UserRecord` noted as a latent trap |
 
 ---
 
@@ -66,189 +54,136 @@
 
 | File | Count | Scope |
 |------|:-----:|-------|
-| `tests/api_test.mbt` | 89 | Every public API method documented in README |
+| `tests/api_test.mbt` | 90 | Every public API method; **Entry API fill-past-capacity regression (D1)** |
 | `tests/stress_test.mbt` | 72 | Robustness, concurrency safety, memory efficiency, edge cases |
-| `tests/trap_test.mbt` | 39 | Hidden traps, misleading semantics, design gotchas |
-| `tests/comprehensive_test.mbt` | 32 | Custom key types, resize cascade, `get_mut` nesting, alternate key types |
-| Library self-tests (in `../moonbit-indexmap/src/`) | 253 | Unit tests, property tests, benchmark tests, QuickCheck |
-| **Total** | **485** | |
+| `tests/trap_test.mbt` | 39 | Hidden traps: iterator fail-fast, `get_mut` upsert, ToJson key rendering, Eq/Hash order |
+| `tests/comprehensive_test.mbt` | 35 | Custom key types, resize cascade, **`get_mut` authoritative-return regression (D2)** |
+| Library self-tests (in `../moonbit-indexmap/src/`) | 277 | Unit, property, QuickCheck, benchmark tests |
+| **Total** | **513** | |
 
 ### 1.2 Runnable Example
 
-`cmd/lru_cache/` — a working LRU cache implementation built on IndexMap, verifying real-world usage patterns.
+`cmd/lru_cache/` — a working LRU cache implementation built on IndexMap (uses none of the
+v0.3.3-changed APIs; unaffected).
 
 ---
 
-## 2. API Coverage
+## 2. v0.3.3 Regression Coverage Added
 
-### 2.1 IndexMap[K, V] — 100% Coverage
+| New / rewritten test | File | Defect |
+|----------------------|------|:------:|
+| `Entry API: filling past capacity via VacantEntry::insert does not hang` (200 keys, capacity grows past 16) | `api_test.mbt` | D1 |
+| `OccupiedEntry handle stays correct across a resize` (hold handle across 100 inserts) | `trap_test.mbt` | D1 |
+| `get_mut: returning None removes the key even if the callback re-inserted it` | `comprehensive_test.mbt` | D2 |
+| `get_mut: callback removes the same key then returns None — no double deletion` | `comprehensive_test.mbt` | D2 |
+| `get_mut: callback removes the same key then returns Some — no ghost entry` | `comprehensive_test.mbt` | D2 |
+| `get_mut: callback triggers a resize mid-callback — value lands correctly` | `comprehensive_test.mbt` | D2 |
+| `get_mut on absent key — None is a no-op, Some(v) upserts` | `trap_test.mbt` | D2 |
+| `get_mut on a removed key upserts when callback returns Some` | `trap_test.mbt` | D2 |
+| ToJson tests assert raw keys appear as clean JSON keys (`"name"`, `"1"`) — pre-fix they were `String("name")`/`Number(1)` | `api`/`trap`/`stress` | D3 |
+| `iterator created after mutation sees the full mutated state` + CATEGORY 2 documents the `abort` message | `trap_test.mbt` | D4 |
 
-| Category | Methods Verified | Tests |
-|----------|------------------|:-----:|
-| Construct | `new()`, `with_capacity(n)`, `from_array(entries)`, `default()`, `copy()` | 5 |
-| Query | `len()`, `is_empty()`, `capacity()`, `load_factor()`, `max_probe()` | 5 |
-| Core | `insert(k,v)`, `get(k)`, `remove(k)`, `contains(k)`, `clear()`, `get_mut(k,f)` | 6 |
-| Entry | Occupied (`get`/`insert`/`remove`/`key`), Vacant (`insert`/`key`) | 6 |
-| Index | `get_index(i)`, `get_full(k)`, `get_index_of(k)`, `first()`, `last()`, `pop()`, `swap_remove_index(i)` | 7 |
-| Capacity | `reserve(n)`, `shrink_to_fit()` | 2 |
-| Iterate | `iter()`, `keys()`, `values()`, `for_each(f)`, `into_iter()`, `into_array()` | 6 |
-| Bulk | `retain(f)`, `sort_by_key()`, `sort_by(cmp)`, `drain()`, `extend_from_array(entries)` | 5 |
-| Traits | `Show`, `Debug`, `Eq`, `Hash`, `Default`, `ToJson` | 6 |
-
-### 2.2 IndexSet[K] — 100% Coverage
-
-| Category | Methods Verified | Tests |
-|----------|------------------|:-----:|
-| Construct | `new()`, `with_capacity(n)`, `from_array(elements)`, `default()`, `copy()` | 5 |
-| Core | `insert(v)`, `contains(v)`, `remove(v)`, `clear()`, `len()`, `is_empty()` | 6 |
-| Set ops | `is_disjoint(other)`, `is_subset(other)`, `is_superset(other)` | 3 |
-| Bulk | `retain(f)`, `drain()`, `extend_from_array(elements)`, `into_array()` | 4 |
-| Traits | `Show`, `Debug`, `Eq`, `Hash`, `Default`, `ToJson` | 6 |
-| Iteration | `iter()` with order preservation | 1 |
+**Note on D4 testing:** MoonBit's `abort` is not catchable in an expect-test, so the fail-fast
+abort itself cannot be asserted. The suite asserts the *safe* contract (mutate first, then
+iterate) and documents the exact abort message — mirroring the library, which also documents
+rather than tests the abort.
 
 ---
 
-## 3. Robustness Results
+## 3. Findings
 
-### 3.1 Scale Testing
+### 3.1 Defects fixed in v0.3.3 (D1–D4)
 
-| Scenario | Scale | Result |
-|----------|-------|:------:|
-| Int key insertion | 100,000 entries | ✅ Pass |
-| Int key roundtrip (insert → get all) | 50,000 entries | ✅ Pass |
-| String key insertion | 50,000 entries | ✅ Pass |
-| Iteration count verification | 100,000 entries | ✅ Pass |
-| Mass deletion (50% of entries) | 50,000 removed from 100,000 | ✅ Pass |
-| Single-key overwrite | 10,000 consecutive writes | ✅ Pass |
-| Fill → drain → refill cycle | 3 rounds × 1,000 entries | ✅ Pass |
-| Resize cascade (16→32→…→16384) | 20,000 entries, verified at each step | ✅ Pass |
-| Huge key (64KB string) | 65,536 char key | ✅ Pass |
-| Huge value (64KB string) | 65,536 char value | ✅ Pass |
-| Nested IndexMap | `IndexMap[String, IndexMap[String, Int]]` | ✅ Pass |
+All four are verified by the regression tests in §2. Each new test fails on the pre-fix code
+and passes on v0.3.3.
 
-### 3.2 Memory Behavior
+### 3.2 Historical — BUG-001 (superseded)
 
-| Scenario | Finding |
-|----------|---------|
-| Default capacity | 16 (minimum) |
-| Load factor threshold | ~0.75 triggers resize (correct) |
-| `shrink_to_fit` on sparse map | Capacity reduced, data intact |
-| `clear()` capacity behavior | Capacity preserved (not shrunk — acceptable) |
-| Tombstone-triggered rehash | Works correctly at 25% threshold |
-| Tombstone chronic accumulation | Possible under cyclic 20%-delete patterns (performance degradation, not correctness) |
-| `drain` + refill capacity stability | No pathological growth |
-| 5,000 temporary IndexMaps created/destroyed | No crash, no memory leak observed |
-| 5,000 temporary IndexSets created/destroyed | No crash |
+**BUG-001** (v0.2.0): `get_mut` callback delete + re-insert of the same key lost data.
+- v0.3.2 "fixed" it with a `contains(key)` guard that preserved the re-inserted value — but
+  that guard **silently broke plain deletion** (returning `None` became a no-op).
+- v0.3.3 **supersedes** it: `get_mut` was reworked so the callback's return value is
+  authoritative. `None` now always removes the key (even after a re-insert); plain deletion
+  works again. Our former BUG-001 regression test was **inverted** to assert the new semantics.
+- **Status: ✅ Resolved by redesign.** The four plain-deletion tests
+  (`api_test:187`, `comprehensive_test:287`, `stress_test:881`, `trap_test:563`) now pass
+  correctly.
 
-### 3.3 Edge Values
+### 3.3 Design notes (unchanged)
 
-| Value | Type | Result |
-|-------|------|:------:|
-| `0` | Int key | ✅ Pass |
-| `-1` | Int key | ✅ Pass |
-| `-2147483648` (Int::MIN) | Int key | ✅ Pass |
-| `2147483647` (Int::MAX) | Int key | ✅ Pass |
-| `""` (empty string) | String key / value | ✅ Pass |
-| `true` / `false` | Bool key (2-value domain) | ✅ Pass |
-| `'a'` / `'z'` / `'0'` | Char key | ✅ Pass |
-| Custom struct | `derive(Hash, Eq, Compare, Debug)` key | ✅ Pass |
+**WARN-001: `Eq` and `Hash` are insertion-order-sensitive.** Two maps with identical
+key-value pairs but different insertion orders are not equal and hash differently. IndexSet
+equally affected. **Status: still present** — a design choice inherited from Rust indexmap,
+documented in the library README.
 
----
+**WARN-002: `swap_remove_index` is an O(n) shift-remove.** The name implies O(1)
+swap-with-last, but the implementation preserves insertion order via shift-remove. Behavior
+is correct; only the name is misleading. **Status: README clarified (v0.3.2); implementation
+intentionally unchanged.** Our `trap_test.mbt` asserts the order-preserving (shift-remove)
+semantics.
 
-## 4. Concurrency Safety
+**WARN-004: Iterator mutation is fail-fast.** In v0.3.3 this was **improved**: instead of
+silently skipping entries then crashing OOB, iterators now `abort` with the clear message
+`IndexMap: map mutated during iteration`. **Status: ✅ improved in v0.3.3.**
 
-MoonBit currently lacks native thread-level concurrency. Within the single-threaded ownership model:
+### 3.4 Confirmed Correct
 
-| Scenario | Result |
-|----------|:------:|
-| `copy()` independence (mutations on copy don't affect original) | ✅ Pass |
-| Multiple copies diverging independently | ✅ Pass |
-| `into_iter()` properly empties source map | ✅ Pass |
-| `into_array()` properly empties source map | ✅ Pass |
-| `drain()` properly empties source map | ✅ Pass |
-| `iter()` / `keys()` / `values()` coexisting independently | ✅ Pass |
-| Iterator mutation safety (removing during iteration) | ⚠️ Crash (fail-fast) |
-
----
-
-## 5. Findings
-
-### 5.1 🔴 Bug Confirmed (1)
-
-**BUG-001: `get_mut` callback — simultaneous delete + re-insert of same key causes data loss**
-
-- **Severity**: Medium (requires unusual callback pattern)
-- **Reproduction**: Call `get_mut("key", fn(v) { map.insert("key", new_val); None })`
-- **Root cause**: `insert()` in callback updates the bucket entry, then callback returns `None`, causing `get_mut` to overwrite the bucket with a tombstone
-- **Workaround**: Do not combine same-key `insert` + `None` return in `get_mut` callbacks. Use `Some(new_val)` to update in-place instead.
-- **Test location**: `tests/comprehensive_test.mbt` line ~296
-- **v0.3.2 status**: **✅ Fixed** — `contains(key)` guard added in the `None` branch of `get_mut`. New library regression test confirms.
-
-### 5.2 🟡 Design Warnings (4)
-
-**WARN-001: `Eq` and `Hash` are insertion-order-sensitive**
-
-Unlike MoonBit's built-in `Map[K, V]`, IndexMap's `Eq` compares entries in insertion order. Two maps with identical key-value pairs but different insertion orders are **not equal** and produce **different hashes**. This affects `IndexSet` equally.
-
-*Impact*: Cannot use IndexMap/IndexSet as keys in hash-based containers if insertion order is not guaranteed identical.
-**v0.3.2 status**: **Still present** — design choice inherited from Rust indexmap
-
-**WARN-002: `swap_remove_index` name is misleading**
-
-The method name suggests O(1) swap-with-last-element removal, but the implementation calls `remove(key)` → `remove_from_order` which is an O(n) shift-remove that **preserves insertion order**. The behavior is correct but the name implies different performance characteristics.
-**v0.3.2 status**: **README clarified** — self-contradictory sentence removed from Gotcha #3
-
-**WARN-003: `max_probe_distance` stale after `sort_by_key` / `sort_by`**
-
-Sorting rebuilds `order[]` and `positions[]` but does not rebuild `buckets[]` or recalculate `max_probe_distance`. The reported value reflects the pre-sort bucket layout.
-**v0.3.2 status**: **✅ Fixed** — explicit `recalc_max_probe()` called after `sort_by_key()` and `sort_by()`
-
-**WARN-004: Iterator mutation is fail-fast (crash), not silent corruption**
-
-Creating an iterator and then mutating the map (insert/remove) before consuming the iterator causes an out-of-bounds array access crash. This is preferable to silent data corruption, but users must be aware that iterators and mutations cannot be interleaved.
-**v0.3.2 status**: **Still present** — fail-fast is a deliberate design choice
-
-### 5.3 🟢 Confirmed Correct
-
-- All 42 README-documented API methods work as specified
+- All README-documented API methods work as specified
 - Insertion-order iteration invariant holds at all tested scales (1 to 100,000 entries)
-- `sort_by_key` and `sort_by` correctly reorder entries
-- `ToJson` preserves insertion order in JSON output
-- Entry API (`OccupiedEntry` / `VacantEntry`) correctly handles in-place manipulation
-- `retain` + `drain` + `extend_from_array` bulk operations are correct
+- **Entry API is resize-safe** — filling past capacity via `VacantEntry::insert` no longer hangs (D1)
+- **`OccupiedEntry` handles stay valid across resizes** — re-probed by key (D1)
+- **`get_mut` is corruption-free** under callback delete / re-insert / resize (D2)
+- **`ToJson` emits canonical raw keys** for String and Int keys (D3)
+- `sort_by_key` / `sort_by` reorder correctly and keep `max_probe()` consistent (fixed v0.3.2)
 - All trait implementations (`Debug`, `Eq`, `Hash`, `Default`, `ToJson`) function correctly
-- `with_capacity(0)`, `with_capacity(1)`, `with_capacity(1000000)` all produce valid maps
-- `shrink_to_fit` on empty and populated maps works correctly
 - Custom struct keys with derived traits work across module boundaries
 
 ---
 
-## 6. Production Readiness Assessment
+## 4. Robustness Results (unchanged from prior runs, re-verified)
+
+| Scenario | Scale | Result |
+|----------|-------|:------:|
+| Int key insertion | 100,000 entries | ✅ Pass |
+| Int key roundtrip | 50,000 entries | ✅ Pass |
+| Mass deletion (50%) | 50,000 removed from 100,000 | ✅ Pass |
+| Resize cascade (16→…→16384) | 20,000 entries | ✅ Pass |
+| Entry API fill past capacity | 200 entries (multiple resizes) | ✅ Pass (new, D1) |
+| `get_mut` callback-triggered resize | 32 entries | ✅ Pass (new, D2) |
+| Huge key / value (64KB) | 65,536 chars | ✅ Pass |
+
+---
+
+## 5. Production Readiness Assessment
 
 | Dimension | Rating | Notes |
 |-----------|:------:|-------|
 | **API Completeness** | ⭐⭐⭐⭐⭐ | All documented methods verified |
-| **Data Correctness** | ⭐⭐⭐⭐⭐ | 0 correctness failures at any scale |
+| **Data Correctness** | ⭐⭐⭐⭐⭐ | 0 correctness failures; D1/D2 corruption bugs fixed |
 | **Robustness (100k+)** | ⭐⭐⭐⭐⭐ | Stable resize/rehash under load |
-| **Memory Efficiency** | ⭐⭐⭐⭐ | Auto resize/shrink works; tombstone slow-accumulation possible |
+| **Memory Efficiency** | ⭐⭐⭐⭐ | Auto resize/shrink works |
 | **Edge Case Handling** | ⭐⭐⭐⭐⭐ | All boundary values handled safely |
-| **Concurrency Safety** | ⭐⭐⭐⭐ | Copy isolation works; iterator mutation crashes cleanly |
-| **API Design Clarity** | ⭐⭐⭐ | `swap_remove_index` misleading; `get_mut` semantics need docs |
-| **Documentation** | ⭐⭐⭐⭐ | README clear; gotchas added in v0.2.1 as acknowledged |
-| **Test Coverage** | ⭐⭐⭐⭐⭐ | 485 tests with 100% API coverage |
+| **Concurrency Safety** | ⭐⭐⭐⭐ | Copy isolation works; iterator mutation aborts cleanly |
+| **API Design Clarity** | ⭐⭐⭐⭐ | `get_mut` semantics now documented; `swap_remove_index` name still slightly misleading |
+| **Documentation** | ⭐⭐⭐⭐ | README gotchas accurate; fail-fast documented |
+| **Test Coverage** | ⭐⭐⭐⭐⭐ | 513 tests, 100% API coverage + regression tests for all four v0.3.3 fixes |
 
-**Overall: Production-ready for single-threaded use.** The library is suitable for configuration parsing, LRU caches, ordered JSON serialization, deterministic testing, and message deduplication. Users should be aware of the order-sensitive `Eq`/`Hash` semantics and avoid interleaving iterator use with map mutations.
+**Overall: Production-ready for single-threaded use.** v0.3.3 closes the last correctness
+defects (Entry-API hang, `get_mut` corruption). Suitable for configuration parsing, LRU
+caches, ordered JSON serialization, deterministic testing, and message deduplication. Users
+should be aware of the order-sensitive `Eq`/`Hash` semantics, the authoritative `get_mut`
+return value, and the fail-fast iterator contract.
 
 ---
 
-## 7. Test Execution
+## 6. Test Execution
 
 ```bash
 cd indexmap-test-suite
-moon check    # 0 errors
-moon test     # 232 tests from indexmap-test-suite
-              # + 253 tests from library self-tests
-              # = 485 total, 0 failed
+moon check    # 0 errors (warnings are in the library source, not this suite)
+moon test     # 236 tests from indexmap-test-suite
+              # + 277 tests from library self-tests
+              # = 513 total, 0 failed
 
 # Runnable example
 moon run cmd/lru_cache
@@ -257,20 +192,28 @@ moon run cmd/lru_cache
 
 ---
 
-## 8. Recommendations
+## 7. Recommendations
 
-### For Library Maintainers (v0.3.2 status)
+### For Library Maintainers (v0.3.3 status)
 
-1. ~~**Fix BUG-001**~~ — **✅ Done in v0.3.2**: `contains(key)` guard added in `get_mut` `None` branch.
-2. ~~**Fix WARN-003**~~ — **✅ Done in v0.3.2**: `recalc_max_probe()` added after `sort_by_key`/`sort_by`.
-3. ~~**Clarify WARN-002**~~ — **✅ Done in v0.3.2**: README Gotcha #3's self-contradictory sentence removed.
-4. **WARN-001 (Eq/Hash order-sensitive)**: Acknowledge as a permanent design choice — it's inherited from Rust's indexmap and documented. Not recommended to change; would break the API contract.
-5. **WARN-004 (Iterator safety)**: Consider adding a runtime check that panics with a clear message ("map mutated during iteration") rather than an OOB crash. The fail-fast behavior is correct; the *error message* could be improved.
+1. ~~**Fix BUG-001**~~ — **✅ Superseded in v0.3.3**: `get_mut` reworked to authoritative-return;
+   plain deletion and the re-insert edge case are both correct now.
+2. ~~**Fix WARN-003** (`max_probe` stale after sort)~~ — **✅ Done in v0.3.2**.
+3. ~~**Fix the Entry-API expansion hang (D1)**~~ — **✅ Done in v0.3.3**.
+4. ~~**Make iterators fail-fast with a clear message (WARN-004 / D4)**~~ — **✅ Done in v0.3.3**.
+5. **WARN-001 (Eq/Hash order-sensitive)**: Keep as a documented design choice (inherited from
+   Rust indexmap). Changing it would break the API contract.
+6. **WARN-002 (`swap_remove_index` name)**: Consider renaming to `shift_remove_index` in a
+   future breaking release, or keep the README clarification.
+7. **Minor**: the library emits `type_param_method` deprecation warnings (dot-syntax on
+   multi-bound type params, e.g. `k.to_string()` → `Show::to_string`). Cosmetic only.
 
 ### For Users
 
-1. Use `OccupiedEntry::insert()` to update values without changing position
-2. Use `remove()` + `insert()` to update values AND move the key to the end
-3. Avoid `get_mut` callbacks that both delete and re-insert the same key
-4. Create fresh iterators after completing mutations
-5. Do not rely on IndexMap/IndexSet `Eq`/`Hash` equality for order-independent comparisons
+1. `get_mut(key, f)`: the callback's return is authoritative — `Some(v)` stores/upserts `v`,
+   `None` removes the key (even if the callback re-inserted it).
+2. Use `OccupiedEntry::insert()` to update values without changing position (handle is
+   resize-safe in v0.3.3).
+3. Finish all mutations before creating an iterator; a live iterator aborts if the map changes.
+4. To serialize custom-struct keys with `to_json`, the key type must derive `Show`.
+5. Do not rely on IndexMap/IndexSet `Eq`/`Hash` for order-independent comparisons.

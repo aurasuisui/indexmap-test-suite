@@ -1,7 +1,5 @@
 import {
-  "aurasuisui/indexmap" @indexmap,
+  "aurasuisui/indexmap",
 }
 
-options(
-  "is-main": true,
-)
+pkgtype(kind: "executable")
